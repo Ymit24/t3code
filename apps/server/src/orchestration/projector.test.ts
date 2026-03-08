@@ -57,6 +57,7 @@ describe("orchestration projector", () => {
             projectId: "project-1",
             title: "demo",
             model: "gpt-5-codex",
+            isPinned: false,
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
@@ -74,6 +75,7 @@ describe("orchestration projector", () => {
         projectId: "project-1",
         title: "demo",
         model: "gpt-5-codex",
+        isPinned: false,
         runtimeMode: "full-access",
         interactionMode: "default",
         branch: null,
@@ -120,6 +122,59 @@ describe("orchestration projector", () => {
         ),
       ),
     ).rejects.toBeDefined();
+  });
+
+  it("updates thread pin state from thread.meta-updated events", async () => {
+    const now = new Date().toISOString();
+    const updatedAt = new Date(Date.now() + 1_000).toISOString();
+    const model = createEmptyReadModel(now);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: now,
+          commandId: "cmd-thread-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            model: "gpt-5-codex",
+            isPinned: false,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      ),
+    );
+
+    const afterPin = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.meta-updated",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: updatedAt,
+          commandId: "cmd-thread-pin",
+          payload: {
+            threadId: "thread-1",
+            isPinned: true,
+            updatedAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterPin.threads[0]?.isPinned).toBe(true);
   });
 
   it("keeps projector forward-compatible for unhandled event types", async () => {

@@ -205,6 +205,7 @@ function createSnapshotForTargetUser(options: {
         projectId: PROJECT_ID,
         title: "Browser test thread",
         model: "gpt-5",
+        isPinned: false,
         interactionMode: "default",
         runtimeMode: "full-access",
         branch: "main",

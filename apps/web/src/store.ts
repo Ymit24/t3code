@@ -222,6 +222,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
           }),
           thread.model,
         ),
+        isPinned: thread.isPinned,
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
         session: thread.session

@@ -18,6 +18,7 @@ function makeThread(input: Partial<Thread> & Pick<Thread, "id" | "projectId" | "
     createdAt: input.createdAt,
     latestTurn: null,
     branch: input.branch ?? null,
+    isPinned: input.isPinned ?? false,
     worktreePath: input.worktreePath ?? null,
     turnDiffSummaries: [],
     activities: [],
