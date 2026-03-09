@@ -1504,12 +1504,7 @@ export default function Sidebar() {
                                     <SidebarMenuSubButton
                                       render={<div role="button" tabIndex={0} />}
                                       size="sm"
-                                      isActive={containsActiveThread}
-                                      className={`h-7 w-full translate-x-0 cursor-default justify-start px-2 text-left hover:bg-accent hover:text-foreground ${
-                                        containsActiveThread
-                                          ? "bg-accent/70 text-foreground ring-1 ring-border/60 dark:bg-accent/45"
-                                          : "text-muted-foreground"
-                                      }`}
+                                      className="h-7 w-full translate-x-0 cursor-default justify-start px-2 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
                                     />
                                   }
                                   onContextMenu={(event) => {
@@ -1533,9 +1528,6 @@ export default function Sidebar() {
                                   <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
                                   <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground/90">
                                     {entry.branch}
-                                  </span>
-                                  <span className="rounded-full border border-border/70 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-muted-foreground/60">
-                                    {entry.threads.length}
                                   </span>
                                 </CollapsibleTrigger>
                               </SidebarMenuSubItem>
