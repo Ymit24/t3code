@@ -18,6 +18,7 @@ import { resolveDiffThemeName } from "../lib/diffRendering";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useStore } from "../store";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
+import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
@@ -299,16 +300,25 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     target?.scrollIntoView({ block: "nearest" });
   }, [selectedFilePath, renderableFiles]);
 
+  const availableEditors = useQuery(availableEditorsQueryOptions());
+
   const openDiffFileInEditor = useCallback(
     (filePath: string) => {
       const api = readNativeApi();
       if (!api) return;
-      const targetPath = activeCwd ? resolvePathLinkTarget(filePath, activeCwd) : filePath;
-      void api.shell.openInEditor(targetPath, preferredTerminalEditor()).catch((error) => {
-        console.warn("Failed to open diff file in editor.", error);
-      });
+      const targetPath = activeCwd
+        ? resolvePathLinkTarget(filePath, activeCwd)
+        : filePath;
+      void api.shell
+        .openInEditor(
+          targetPath,
+          preferredTerminalEditor(availableEditors.data),
+        )
+        .catch((error) => {
+          console.warn("Failed to open diff file in editor.", error);
+        });
     },
-    [activeCwd],
+    [activeCwd, availableEditors.data],
   );
 
   const selectTurn = (turnId: TurnId) => {

@@ -26,7 +26,9 @@ import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
 import { resolveMarkdownFileLinkTarget } from "../markdown-links";
 import { readNativeApi } from "../nativeApi";
-import { preferredTerminalEditor } from "../terminal-links";
+import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
+import { useQuery } from "@tanstack/react-query";
+import { preferredTerminalEditor } from "~/terminal-links";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -235,6 +237,8 @@ function SuspenseShikiCodeBlock({
 function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const availableEditors = useQuery(availableEditorsQueryOptions());
+
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, ...props }) {
@@ -252,7 +256,10 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
               event.stopPropagation();
               const api = readNativeApi();
               if (api) {
-                void api.shell.openInEditor(targetPath, preferredTerminalEditor());
+                void api.shell.openInEditor(
+                  targetPath,
+                  preferredTerminalEditor(availableEditors.data),
+                );
               } else {
                 console.warn("Native API not found. Unable to open file in editor.");
               }
@@ -282,7 +289,7 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
         );
       },
     }),
-    [cwd, diffThemeName, isStreaming],
+    [cwd, diffThemeName, isStreaming, availableEditors.data],
   );
 
   return (
