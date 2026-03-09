@@ -14,7 +14,6 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
 import { SidebarInset } from "~/components/ui/sidebar";
-import { preferredTerminalEditor } from "~/terminal-links";
 import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
 
 const THEME_OPTIONS = [

@@ -23,7 +23,6 @@ import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
-import { preferredTerminalEditor } from "~/terminal-links";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;

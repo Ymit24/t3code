@@ -578,7 +578,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
             data: threadToastData,
           });
         });
-      });
     },
     [gitCwd, threadToastData, availableEditors.data],
   );
