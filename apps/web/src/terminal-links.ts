@@ -197,5 +197,11 @@ export function preferredTerminalEditor(availableEditorIds?: readonly EditorId[]
     return fallback;
   }
 
+  const storedEditorIsAvailable =
+    availableEditorIds && availableEditorIds.includes(configured.id);
+  if (!storedEditorIsAvailable) {
+    return fallback;
+  }
+
   return configured.id;
 }
