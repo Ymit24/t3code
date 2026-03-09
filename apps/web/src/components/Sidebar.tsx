@@ -1504,7 +1504,7 @@ export default function Sidebar() {
                                     <SidebarMenuSubButton
                                       render={<div role="button" tabIndex={0} />}
                                       size="sm"
-                                      className="h-7 w-full translate-x-0 cursor-default justify-start px-2 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
+                                      className="h-7 w-full translate-x-0 cursor-default justify-start px-2 text-left text-muted-foreground select-none hover:bg-accent hover:text-foreground"
                                     />
                                   }
                                   onContextMenu={(event) => {
