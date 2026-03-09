@@ -7,7 +7,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
-import { QueryClient, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { Button } from "../components/ui/button";
@@ -22,6 +22,8 @@ import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
+import { preferredTerminalEditor } from "~/terminal-links";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -140,6 +142,7 @@ function EventRouter() {
   const pathnameRef = useRef(pathname);
   const lastConfigIssuesSignatureRef = useRef<string | null>(null);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
+  const availableEditors = useQuery(availableEditorsQueryOptions());
 
   pathnameRef.current = pathname;
 
@@ -264,7 +267,10 @@ function EventRouter() {
             void queryClient
               .ensureQueryData(serverConfigQueryOptions())
               .then((config) =>
-                api.shell.openInEditor(config.keybindingsConfigPath, preferredTerminalEditor()),
+                api.shell.openInEditor(
+                  config.keybindingsConfigPath,
+                  preferredTerminalEditor(availableEditors.data),
+                ),
               )
               .catch((error) => {
                 toastManager.add({
@@ -291,6 +297,7 @@ function EventRouter() {
     removeOrphanedTerminalStates,
     setProjectExpanded,
     syncServerReadModel,
+    availableEditors.data,
   ]);
 
   return null;

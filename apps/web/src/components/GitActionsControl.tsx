@@ -42,6 +42,7 @@ import {
 } from "~/lib/gitReactQuery";
 import { preferredTerminalEditor, resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
+import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -182,6 +183,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     const current = branchList?.branches.find((branch) => branch.name === branchName);
     return current?.isDefault ?? (branchName === "main" || branchName === "master");
   }, [branchList?.branches, gitStatusForActions?.branch]);
+  const availableEditors = useQuery(availableEditorsQueryOptions());
 
   const gitActionMenuItems = useMemo(
     () => buildMenuItems(gitStatusForActions, isGitActionRunning),
@@ -565,16 +567,20 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         return;
       }
       const target = resolvePathLinkTarget(filePath, gitCwd);
-      void api.shell.openInEditor(target, preferredTerminalEditor()).catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Unable to open file",
-          description: error instanceof Error ? error.message : "An error occurred.",
-          data: threadToastData,
+      void api.shell
+        .openInEditor(target, preferredTerminalEditor(availableEditors.data))
+        .catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Unable to open file",
+            description:
+              error instanceof Error ? error.message : "An error occurred.",
+            data: threadToastData,
+          });
         });
       });
     },
-    [gitCwd, threadToastData],
+    [gitCwd, threadToastData, availableEditors.data],
   );
 
   if (!gitCwd) return null;

@@ -26,6 +26,8 @@ import {
   type ThreadTerminalGroup,
 } from "../types";
 import { readNativeApi } from "~/nativeApi";
+import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
+import { useQuery } from "@tanstack/react-query";
 
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
@@ -136,6 +138,13 @@ function TerminalViewport({
   const onSessionExitedRef = useRef(onSessionExited);
   const hasHandledExitRef = useRef(false);
 
+  const availableEditors = useQuery(availableEditorsQueryOptions());
+  const availableEditorsRef = useRef(availableEditors.data);
+
+  useEffect(() => {
+    availableEditorsRef.current = availableEditors.data;
+  }, [availableEditors.data]);
+
   useEffect(() => {
     onSessionExitedRef.current = onSessionExited;
   }, [onSessionExited]);
@@ -236,12 +245,19 @@ function TerminalViewport({
               }
 
               const target = resolvePathLinkTarget(match.text, cwd);
-              void api.shell.openInEditor(target, preferredTerminalEditor()).catch((error) => {
-                writeSystemMessage(
-                  latestTerminal,
-                  error instanceof Error ? error.message : "Unable to open path",
-                );
-              });
+              void api.shell
+                .openInEditor(
+                  target,
+                  preferredTerminalEditor(availableEditorsRef.current),
+                )
+                .catch((error) => {
+                  writeSystemMessage(
+                    latestTerminal,
+                    error instanceof Error
+                      ? error.message
+                      : "Unable to open path",
+                  );
+                });
             },
           })),
         );

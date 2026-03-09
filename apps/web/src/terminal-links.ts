@@ -176,8 +176,12 @@ export function resolvePathLinkTarget(rawPath: string, cwd: string): string {
   return `${resolvedPath}:${line}${column ? `:${column}` : ""}`;
 }
 
-export function preferredTerminalEditor(): EditorId {
-  const fallback = EDITORS.find((editor) => editor.command)?.id ?? EDITORS[0]?.id ?? "cursor";
+export function preferredTerminalEditor(availableEditorIds?: readonly EditorId[]): EditorId {
+  const fallback =
+    EDITORS.find((editor) => availableEditorIds?.includes(editor.id))?.id ??
+    EDITORS.find((editor) => editor.command)?.id ??
+    EDITORS[0]?.id ??
+    "cursor";
 
   if (typeof window === "undefined") {
     return fallback;

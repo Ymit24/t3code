@@ -14,6 +14,8 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { preferredTerminalEditor } from "~/terminal-links";
+import { availableEditorsQueryOptions } from "~/lib/availableEditorsReactQuery";
 
 const THEME_OPTIONS = [
   {
@@ -93,6 +95,7 @@ function SettingsRouteView() {
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
   >({});
+  const availableEditors = useQuery(availableEditorsQueryOptions());
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
@@ -104,7 +107,10 @@ function SettingsRouteView() {
     setIsOpeningKeybindings(true);
     const api = ensureNativeApi();
     void api.shell
-      .openInEditor(keybindingsConfigPath, preferredTerminalEditor())
+      .openInEditor(
+        keybindingsConfigPath,
+        preferredTerminalEditor(availableEditors.data),
+      )
       .catch((error) => {
         setOpenKeybindingsError(
           error instanceof Error ? error.message : "Unable to open keybindings file.",
@@ -113,7 +119,7 @@ function SettingsRouteView() {
       .finally(() => {
         setIsOpeningKeybindings(false);
       });
-  }, [keybindingsConfigPath]);
+  }, [keybindingsConfigPath, availableEditors.data]);
 
   const addCustomModel = useCallback((provider: ProviderKind) => {
     const customModelInput = customModelInputByProvider[provider];
