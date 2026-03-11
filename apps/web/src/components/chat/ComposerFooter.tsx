@@ -8,14 +8,20 @@ import { CodexTraitsPicker } from "./CodexTraitsPicker";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { ComposerSendControls } from "./ComposerSendControls";
-import { type ChatComposerController } from "./useChatComposerController";
+import {
+  type ChatComposerActionsSection,
+  type ChatComposerAttachmentsSection,
+  type ChatComposerBannerSection,
+  type ChatComposerControlsSection,
+  type ChatComposerEditorSection,
+} from "./useChatComposerController";
 
 interface ComposerFooterProps {
-  actions: ChatComposerController["actions"];
-  attachments: ChatComposerController["attachments"];
-  banner: ChatComposerController["banner"];
-  controls: ChatComposerController["controls"];
-  editor: ChatComposerController["editor"];
+  actions: ChatComposerActionsSection;
+  attachments: ChatComposerAttachmentsSection;
+  banner: ChatComposerBannerSection;
+  controls: ChatComposerControlsSection;
+  editor: ChatComposerEditorSection;
 }
 
 export function ComposerFooter({

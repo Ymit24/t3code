@@ -2,10 +2,10 @@ import { proposedPlanTitle } from "../../proposedPlan";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import { type ChatComposerController } from "./useChatComposerController";
+import { type ChatComposerBannerSection } from "./useChatComposerController";
 
 interface ComposerBannerProps {
-  banner: ChatComposerController["banner"];
+  banner: ChatComposerBannerSection;
 }
 
 export function ComposerBanner({ banner }: ComposerBannerProps) {

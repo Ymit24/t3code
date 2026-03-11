@@ -2,10 +2,10 @@ import { CircleAlertIcon, XIcon } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { type ChatComposerController } from "./useChatComposerController";
+import { type ChatComposerAttachmentsSection } from "./useChatComposerController";
 
 interface ComposerAttachmentTrayProps {
-  attachments: ChatComposerController["attachments"];
+  attachments: ChatComposerAttachmentsSection;
 }
 
 export function ComposerAttachmentTray({ attachments }: ComposerAttachmentTrayProps) {

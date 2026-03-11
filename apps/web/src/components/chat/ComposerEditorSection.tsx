@@ -2,12 +2,16 @@ import { cn } from "~/lib/utils";
 import { ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
-import { type ChatComposerController } from "./useChatComposerController";
+import {
+  type ChatComposerAttachmentsSection,
+  type ChatComposerEditorSection as ChatComposerEditorSectionType,
+  type ChatComposerMenuSection,
+} from "./useChatComposerController";
 
 interface ComposerEditorSectionProps {
-  attachments: ChatComposerController["attachments"];
-  editor: ChatComposerController["editor"];
-  menu: ChatComposerController["menu"];
+  attachments: ChatComposerAttachmentsSection;
+  editor: ChatComposerEditorSectionType;
+  menu: ChatComposerMenuSection;
 }
 
 export function ComposerEditorSection({

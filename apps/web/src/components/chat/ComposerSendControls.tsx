@@ -2,13 +2,18 @@ import { ChevronDownIcon } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { type ChatComposerController } from "./useChatComposerController";
+import {
+  type ChatComposerActionsSection,
+  type ChatComposerAttachmentsSection,
+  type ChatComposerBannerSection,
+  type ChatComposerEditorSection,
+} from "./useChatComposerController";
 
 interface ComposerSendControlsProps {
-  actions: ChatComposerController["actions"];
-  attachments: ChatComposerController["attachments"];
-  banner: ChatComposerController["banner"];
-  editor: ChatComposerController["editor"];
+  actions: ChatComposerActionsSection;
+  attachments: ChatComposerAttachmentsSection;
+  banner: ChatComposerBannerSection;
+  editor: ChatComposerEditorSection;
 }
 
 export function ComposerSendControls({
