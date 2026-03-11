@@ -292,7 +292,7 @@ export function ChatThreadContent({
     if (previous && !current) {
       terminalOpenByThreadRef.current[activeThread.id] = current;
       const frame = window.requestAnimationFrame(() => {
-        composerController.focusComposer();
+        composerController.focus.focusComposer();
       });
       return () => {
         window.cancelAnimationFrame(frame);
@@ -300,17 +300,17 @@ export function ChatThreadContent({
     }
 
     terminalOpenByThreadRef.current[activeThread.id] = current;
-  }, [activeThread.id, composerController, terminalOpen]);
+  }, [activeThread.id, composerController.focus, terminalOpen]);
 
   useEffect(() => {
     if (terminalOpen) return;
     const frame = window.requestAnimationFrame(() => {
-      composerController.focusComposer();
+      composerController.focus.focusComposer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread.id, composerController, terminalOpen]);
+  }, [activeThread.id, composerController.focus, terminalOpen]);
 
   const navigateExpandedImage = useCallback((direction: -1 | 1) => {
     setExpandedImage((existing) => {
@@ -334,9 +334,9 @@ export function ChatThreadContent({
         {isGitRepo ? (
           <BranchToolbar
             threadId={activeThread.id}
-            onEnvModeChange={composerController.onEnvModeChange}
-            envLocked={composerController.envLocked}
-            onComposerFocusRequest={composerController.scheduleComposerFocus}
+            onEnvModeChange={composerController.thread.onEnvModeChange}
+            envLocked={composerController.thread.envLocked}
+            onComposerFocusRequest={composerController.focus.scheduleComposerFocus}
             {...(canCheckoutPullRequestIntoThread
               ? { onCheckoutPullRequestRequest: openPullRequestDialog }
               : {})}
