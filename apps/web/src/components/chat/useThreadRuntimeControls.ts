@@ -33,31 +33,16 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../../terminal
 import { newCommandId } from "../../lib/utils";
 import { toastManager } from "../ui/toast";
 import { type NewProjectScriptInput } from "../ProjectScriptsControl";
-import { LAST_INVOKED_SCRIPT_BY_PROJECT_KEY } from "../ChatView.logic";
+import {
+  LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
+  readLastInvokedScriptByProjectFromStorage,
+} from "../ChatView.logic";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
-
-function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
-  const stored = localStorage.getItem(LAST_INVOKED_SCRIPT_BY_PROJECT_KEY);
-  if (!stored) return {};
-
-  try {
-    const parsed: unknown = JSON.parse(stored);
-    if (!parsed || typeof parsed !== "object") return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        (entry): entry is [string, string] =>
-          typeof entry[0] === "string" && typeof entry[1] === "string",
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
 
 export interface ThreadRuntimeControls {
   activeProviderStatus: ServerProviderStatus | null;
