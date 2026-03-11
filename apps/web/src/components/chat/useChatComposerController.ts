@@ -348,6 +348,7 @@ export function useChatComposerController({
         setExpandedImage(preview);
       },
       onRemoveImage: draftState.attachments.removeComposerImage,
+      resetDragState: draftState.resetDragState,
     },
     banner: {
       activePendingApproval: pendingState.activePendingApproval,

@@ -7,6 +7,7 @@ import { PullRequestThreadDialog } from "../PullRequestThreadDialog";
 import { stripDiffSearchParams } from "../../diffRouteSearch";
 import { readNativeApi } from "../../nativeApi";
 import { newCommandId, newThreadId } from "../../lib/utils";
+import { derivePhase } from "../../session-logic";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type ChatMessage, type Project, type Thread } from "../../types";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { revokeUserMessagePreviewUrls, type SendPhase } from "../ChatView.logic";
@@ -82,6 +83,8 @@ export function ChatThreadContent({
   const [isConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
+  const phase = derivePhase(activeThread.session ?? null);
+  const isSendBusy = sendPhase !== "idle";
 
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftThreadByProjectId = useComposerDraftStore((store) => store.getDraftThreadByProjectId);
@@ -94,7 +97,7 @@ export function ChatThreadContent({
     gitCwd,
     isConnecting,
     isRevertingCheckpoint,
-    isSendBusy: sendPhase !== "idle",
+    isSendBusy,
     onExpandTimelineImage: setExpandedImage,
     onOpenTurnDiff: useCallback(
       (turnId, filePath) => {
@@ -115,6 +118,10 @@ export function ChatThreadContent({
       (turnCount: number) => {
         const api = readNativeApi();
         if (!api || isRevertingCheckpoint) return;
+        if (phase === "running" || isSendBusy || isConnecting) {
+          setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+          return;
+        }
 
         void (async () => {
           const confirmed = await api.dialogs.confirm(
@@ -147,7 +154,7 @@ export function ChatThreadContent({
           setIsRevertingCheckpoint(false);
         })();
       },
-      [activeThread.id, isRevertingCheckpoint, setThreadError],
+      [activeThread.id, isConnecting, isRevertingCheckpoint, isSendBusy, phase, setThreadError],
     ),
     optimisticUserMessages,
     resolvedTheme,
@@ -182,6 +189,8 @@ export function ChatThreadContent({
     togglePlanSidebar,
     markPlanSidebarOpenOnNextThread,
   });
+  const { focusComposer, scheduleComposerFocus } = composerController.focus;
+  const { resetDragState } = composerController.attachments;
 
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
 
@@ -267,6 +276,7 @@ export function ChatThreadContent({
   useEffect(() => {
     setPullRequestDialogState(null);
     setExpandedImage(null);
+    resetDragState();
     setOptimisticUserMessages((existing) => {
       for (const message of existing) {
         revokeUserMessagePreviewUrls(message);
@@ -275,7 +285,7 @@ export function ChatThreadContent({
     });
     setSendPhase("idle");
     setSendStartedAt(null);
-  }, [threadId]);
+  }, [resetDragState, threadId]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);
@@ -292,7 +302,7 @@ export function ChatThreadContent({
     if (previous && !current) {
       terminalOpenByThreadRef.current[activeThread.id] = current;
       const frame = window.requestAnimationFrame(() => {
-        composerController.focus.focusComposer();
+        focusComposer();
       });
       return () => {
         window.cancelAnimationFrame(frame);
@@ -300,17 +310,17 @@ export function ChatThreadContent({
     }
 
     terminalOpenByThreadRef.current[activeThread.id] = current;
-  }, [activeThread.id, composerController.focus, terminalOpen]);
+  }, [activeThread.id, focusComposer, terminalOpen]);
 
   useEffect(() => {
     if (terminalOpen) return;
     const frame = window.requestAnimationFrame(() => {
-      composerController.focus.focusComposer();
+      focusComposer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread.id, composerController.focus, terminalOpen]);
+  }, [activeThread.id, focusComposer, terminalOpen]);
 
   const navigateExpandedImage = useCallback((direction: -1 | 1) => {
     setExpandedImage((existing) => {
@@ -336,7 +346,7 @@ export function ChatThreadContent({
             threadId={activeThread.id}
             onEnvModeChange={composerController.thread.onEnvModeChange}
             envLocked={composerController.thread.envLocked}
-            onComposerFocusRequest={composerController.focus.scheduleComposerFocus}
+            onComposerFocusRequest={scheduleComposerFocus}
             {...(canCheckoutPullRequestIntoThread
               ? { onCheckoutPullRequestRequest: openPullRequestDialog }
               : {})}

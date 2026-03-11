@@ -25,6 +25,7 @@ import {
   buildTemporaryWorktreeBranchName,
   cloneComposerImageForRetry,
   readFileAsDataUrl,
+  revokeUserMessagePreviewUrls,
   type SendPhase,
 } from "../ChatView.logic";
 import { gitCreateWorktreeMutationOptions } from "../../lib/gitReactQuery";
@@ -159,6 +160,7 @@ export function useComposerSendActions({
   const navigate = useNavigate();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
   const sendInFlightRef = useRef(false);
+  const phase = derivePhase(activeThread.session ?? null);
 
   const beginSendPhase = useCallback(
     (nextPhase: Exclude<SendPhase, "idle">) => {
@@ -176,13 +178,19 @@ export function useComposerSendActions({
     if (sendPhase === "idle") {
       return;
     }
-    if (activePendingApproval !== null || activePendingUserInput !== null || activeThread.error) {
+    if (
+      phase === "running" ||
+      activePendingApproval !== null ||
+      activePendingUserInput !== null ||
+      activeThread.error
+    ) {
       resetSendPhase();
     }
   }, [
     activePendingApproval,
     activePendingUserInput,
     activeThread.error,
+    phase,
     resetSendPhase,
     sendPhase,
   ]);
@@ -699,9 +707,14 @@ export function useComposerSendActions({
           promptRef.current.length === 0 &&
           composerImagesRef.current.length === 0
         ) {
-          setOptimisticUserMessages((existing) =>
-            existing.filter((message) => message.id !== messageIdForSend),
-          );
+          setOptimisticUserMessages((existing) => {
+            const removed = existing.filter((message) => message.id === messageIdForSend);
+            for (const message of removed) {
+              revokeUserMessagePreviewUrls(message);
+            }
+            const next = existing.filter((message) => message.id !== messageIdForSend);
+            return next.length === existing.length ? existing : next;
+          });
           promptRef.current = trimmed;
           setPrompt(trimmed);
           setComposerCursor(trimmed.length);
@@ -780,7 +793,7 @@ export function useComposerSendActions({
       onImplementPlanInNewThread,
       onInterrupt,
       onSend,
-      phase: derivePhase(activeThread.session ?? null),
+      phase,
     },
   };
 }
