@@ -11,10 +11,15 @@ interface ChatComposerProps {
 }
 
 export function ChatComposer({ controller, isGitRepo }: ChatComposerProps) {
-  const { actions, attachments, banner, controls, editor, menu } = controller;
+  const { actions, attachments, editor } = controller;
 
   return (
-    <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
+    <div
+      className={cn(
+        "px-3 pt-1.5 sm:px-5 sm:pt-2",
+        isGitRepo ? "pb-1" : "pb-3 sm:pb-4",
+      )}
+    >
       <form
         ref={editor.composerFormRef}
         onSubmit={actions.onSend}
@@ -24,22 +29,18 @@ export function ChatComposer({ controller, isGitRepo }: ChatComposerProps) {
         <div
           className={cn(
             "group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45",
-            attachments.isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border",
+            attachments.isDragOverComposer
+              ? "border-primary/70 bg-accent/30"
+              : "border-border",
           )}
           onDragEnter={attachments.onDragEnter}
           onDragOver={attachments.onDragOver}
           onDragLeave={attachments.onDragLeave}
           onDrop={attachments.onDrop}
         >
-          <ComposerBanner banner={banner} />
-          <ComposerEditorSection attachments={attachments} editor={editor} menu={menu} />
-          <ComposerFooter
-            actions={actions}
-            attachments={attachments}
-            banner={banner}
-            controls={controls}
-            editor={editor}
-          />
+          <ComposerBanner controller={controller} />
+          <ComposerEditorSection controller={controller} />
+          <ComposerFooter controller={controller} />
         </div>
       </form>
     </div>

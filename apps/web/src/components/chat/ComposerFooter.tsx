@@ -8,29 +8,18 @@ import { CodexTraitsPicker } from "./CodexTraitsPicker";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { ComposerSendControls } from "./ComposerSendControls";
-import {
-  type ChatComposerActionsSection,
-  type ChatComposerAttachmentsSection,
-  type ChatComposerBannerSection,
-  type ChatComposerControlsSection,
-  type ChatComposerEditorSection,
-} from "./useChatComposerController";
+import { type ChatComposerController } from "./useChatComposerController";
 
 interface ComposerFooterProps {
-  actions: ChatComposerActionsSection;
-  attachments: ChatComposerAttachmentsSection;
-  banner: ChatComposerBannerSection;
-  controls: ChatComposerControlsSection;
-  editor: ChatComposerEditorSection;
+  controller: Pick<
+    ChatComposerController,
+    "actions" | "attachments" | "banner" | "controls" | "editor"
+  >;
 }
 
-export function ComposerFooter({
-  actions,
-  attachments,
-  banner,
-  controls,
-  editor,
-}: ComposerFooterProps) {
+export function ComposerFooter({ controller }: ComposerFooterProps) {
+  const { banner, controls } = controller;
+
   if (banner.activePendingApproval) {
     return (
       <div className="flex items-center justify-end gap-2 px-2.5 pb-2.5 sm:px-3 sm:pb-3">
@@ -164,12 +153,7 @@ export function ComposerFooter({
         )}
       </div>
 
-      <ComposerSendControls
-        actions={actions}
-        attachments={attachments}
-        banner={banner}
-        editor={editor}
-      />
+      <ComposerSendControls controller={controller} />
     </div>
   );
 }

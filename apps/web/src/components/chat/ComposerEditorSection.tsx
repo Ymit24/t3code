@@ -2,23 +2,15 @@ import { cn } from "~/lib/utils";
 import { ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
-import {
-  type ChatComposerAttachmentsSection,
-  type ChatComposerEditorSection as ChatComposerEditorSectionType,
-  type ChatComposerMenuSection,
-} from "./useChatComposerController";
+import { type ChatComposerController } from "./useChatComposerController";
 
 interface ComposerEditorSectionProps {
-  attachments: ChatComposerAttachmentsSection;
-  editor: ChatComposerEditorSectionType;
-  menu: ChatComposerMenuSection;
+  controller: Pick<ChatComposerController, "attachments" | "editor" | "menu">;
 }
 
-export function ComposerEditorSection({
-  attachments,
-  editor,
-  menu,
-}: ComposerEditorSectionProps) {
+export function ComposerEditorSection({ controller }: ComposerEditorSectionProps) {
+  const { attachments, editor, menu } = controller;
+
   return (
     <div
       className={cn(
@@ -41,7 +33,7 @@ export function ComposerEditorSection({
       ) : null}
 
       {editor.showAttachmentTray && attachments.images.length > 0 ? (
-        <ComposerAttachmentTray attachments={attachments} />
+        <ComposerAttachmentTray controller={controller} />
       ) : null}
 
       <ComposerPromptEditor

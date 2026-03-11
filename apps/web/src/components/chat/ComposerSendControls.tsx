@@ -2,26 +2,15 @@ import { ChevronDownIcon } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import {
-  type ChatComposerActionsSection,
-  type ChatComposerAttachmentsSection,
-  type ChatComposerBannerSection,
-  type ChatComposerEditorSection,
-} from "./useChatComposerController";
+import { type ChatComposerController } from "./useChatComposerController";
 
 interface ComposerSendControlsProps {
-  actions: ChatComposerActionsSection;
-  attachments: ChatComposerAttachmentsSection;
-  banner: ChatComposerBannerSection;
-  editor: ChatComposerEditorSection;
+  controller: Pick<ChatComposerController, "actions" | "attachments" | "banner" | "editor">;
 }
 
-export function ComposerSendControls({
-  actions,
-  attachments,
-  banner,
-  editor,
-}: ComposerSendControlsProps) {
+export function ComposerSendControls({ controller }: ComposerSendControlsProps) {
+  const { actions, attachments, banner, editor } = controller;
+
   return (
     <div data-chat-composer-actions="right" className="flex shrink-0 items-center gap-2">
       {actions.isPreparingWorktree ? (

@@ -2,13 +2,15 @@ import { proposedPlanTitle } from "../../proposedPlan";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import { type ChatComposerBannerSection } from "./useChatComposerController";
+import { type ChatComposerController } from "./useChatComposerController";
 
 interface ComposerBannerProps {
-  banner: ChatComposerBannerSection;
+  controller: Pick<ChatComposerController, "banner">;
 }
 
-export function ComposerBanner({ banner }: ComposerBannerProps) {
+export function ComposerBanner({ controller }: ComposerBannerProps) {
+  const { banner } = controller;
+
   if (banner.activePendingApproval) {
     return (
       <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
