@@ -4,7 +4,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { DiffIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
@@ -13,20 +13,26 @@ import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScr
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { Project, Thread } from "~/types";
+import { useQuery } from "@tanstack/react-query";
+import { gitBranchesQueryOptions } from "~/lib/gitReactQuery";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { shortcutLabelForCommand } from "~/keybindings";
+import { useSearch } from "@tanstack/react-router";
+import { parseDiffRouteSearch } from "~/diffRouteSearch";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
+  LastInvokedScriptByProjectSchema,
+} from "../ChatView.logic";
+import { useStore } from "~/store";
+import { useActiveProject } from "../ChatView";
+
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 
 interface ChatHeaderProps {
-  activeThreadId: ThreadId;
-  activeThreadTitle: string;
-  activeProjectName: string | undefined;
-  isGitRepo: boolean;
-  openInCwd: string | null;
-  activeProjectScripts: ProjectScript[] | undefined;
-  preferredScriptId: string | null;
-  keybindings: ResolvedKeybindingsConfig;
-  availableEditors: ReadonlyArray<EditorId>;
-  diffToggleShortcutLabel: string | null;
-  gitCwd: string | null;
-  diffOpen: boolean;
+  activeThread: Thread;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -35,24 +41,53 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader = memo(function ChatHeader({
-  activeThreadId,
-  activeThreadTitle,
-  activeProjectName,
-  isGitRepo,
-  openInCwd,
-  activeProjectScripts,
-  preferredScriptId,
-  keybindings,
-  availableEditors,
-  diffToggleShortcutLabel,
-  gitCwd,
-  diffOpen,
+  activeThread,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
 }: ChatHeaderProps) {
+  const activeProject = useActiveProject(activeThread);
+
+  const gitCwd = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
+
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
+
+  const isGitRepo = branchesQuery.data?.isRepo ?? true;
+
+  const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
+  const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
+
+  const activeThreadTitle = activeThread.title;
+  const activeProjectName = activeProject?.name;
+  const openInCwd = activeThread.worktreePath ?? activeProject?.cwd ?? null;
+
+  const diffPanelShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "diff.toggle"),
+    [keybindings],
+  );
+
+  const rawSearch = useSearch({
+    strict: false,
+    select: (params) => parseDiffRouteSearch(params),
+  });
+
+  const diffOpen = rawSearch.diff === "1";
+
+  const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
+    LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
+    {},
+    LastInvokedScriptByProjectSchema,
+  );
+
+  const activeProjectScripts = activeProject?.scripts;
+
+  const preferredScriptId = activeProject
+    ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)
+    : null;
+
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
@@ -93,7 +128,9 @@ export const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
-        {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
+        {activeProjectName && (
+          <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThread.id} />
+        )}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -113,8 +150,8 @@ export const ChatHeader = memo(function ChatHeader({
           <TooltipPopup side="bottom">
             {!isGitRepo
               ? "Diff panel is unavailable because this project is not a git repository."
-              : diffToggleShortcutLabel
-                ? `Toggle diff panel (${diffToggleShortcutLabel})`
+              : diffPanelShortcutLabel
+                ? `Toggle diff panel (${diffPanelShortcutLabel})`
                 : "Toggle diff panel"}
           </TooltipPopup>
         </Tooltip>
