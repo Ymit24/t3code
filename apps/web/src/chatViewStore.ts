@@ -19,6 +19,11 @@ export type ChatViewStoreState = {
   increaseTerminalFocusRequestId: () => void;
   openExpandImage: (expandedImage: ExpandedImagePreview) => void;
   closeExpandedImage: () => void;
+
+  setPullRequestDialogState: (pullRequestDialogState: PullRequestDialogState | null) => void;
+
+  composerFocusRequestId: number;
+  focusComposer: () => void;
 };
 
 export function createChatViewStore(threadId: ThreadId) {
@@ -30,6 +35,7 @@ export function createChatViewStore(threadId: ThreadId) {
     optimisticUserMessages: [],
     expandedImage: null,
     pullRequestDialogState: null,
+    composerFocusRequestId: 0,
     increaseTerminalFocusRequestId: () =>
       set((state) => ({ terminalFocusRequestId: state.terminalFocusRequestId + 1 })),
     openExpandImage: (preview) => {
@@ -38,5 +44,13 @@ export function createChatViewStore(threadId: ThreadId) {
     closeExpandedImage: () => {
       set({ expandedImage: null });
     },
+    setPullRequestDialogState: (pullRequestDialogState) => {
+      set({
+        pullRequestDialogState
+      })
+    },
+    focusComposer: () => {
+      set(state => ({ composerFocusRequestId: state.composerFocusRequestId + 1 }))
+    }
   }));
 }
