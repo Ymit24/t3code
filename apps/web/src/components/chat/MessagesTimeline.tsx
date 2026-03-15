@@ -5,7 +5,12 @@ import {
   type VirtualItem,
   useVirtualizer,
 } from "@tanstack/react-virtual";
-import { deriveActiveWorkStartedAt, deriveTimelineEntries, formatElapsed, isLatestTurnSettled } from "../../session-logic";
+import {
+  deriveActiveWorkStartedAt,
+  deriveTimelineEntries,
+  formatElapsed,
+  isLatestTurnSettled,
+} from "../../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX } from "../../chat-scroll";
 import { Thread, type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
@@ -43,22 +48,22 @@ import { useNavigate } from "@tanstack/react-router";
 import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { useChatViewStore } from "../ChatViewStoreProvider";
 import { useTheme } from "~/hooks/useTheme";
+import { useActiveProject } from "~/hooks/chat/useActiveProject";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 
 interface MessagesTimelineProps {
   activeThread: Thread;
-  hasMessages: boolean;
   scrollContainer: HTMLDivElement | null;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   activeThread,
-  hasMessages,
   scrollContainer,
 }: MessagesTimelineProps) {
   const { resolvedTheme } = useTheme();
+  const activeProject = useActiveProject(activeThread);
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
 
   const onToggleWorkGroup = useCallback((groupId: string) => {
@@ -72,7 +77,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   useEffect(() => {
     setExpandedWorkGroups({});
   }, [activeThread?.id]);
-
 
   const { settings } = useAppSettings();
   const timestampFormat = settings.timestampFormat;
@@ -89,6 +93,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const { isWorking } = usePhase(activeThread);
   const { timelineEntries } = useTimelineEntries(activeThread);
+  const hasMessages = timelineEntries.length > 0;
 
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const activeTurnStartedAt = deriveActiveWorkStartedAt(
@@ -99,6 +104,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeTurnInProgress = isWorking || !latestTurnSettled;
+
+  const { phase } = usePhase(activeThread);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (phase !== "running") return;
+    const timer = window.setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [phase]);
 
   const completionSummary = useMemo(() => {
     if (!latestTurnSettled) return null;
@@ -556,7 +573,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div className="min-w-0 px-1 py-0.5">
                 <ChatMarkdown
                   text={messageText}
-                  cwd={markdownCwd}
+                  cwd={markdownCwd ?? undefined}
                   isStreaming={Boolean(row.message.streaming)}
                 />
                 {(() => {
@@ -633,7 +650,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         <div className="min-w-0 px-1 py-0.5">
           <ProposedPlanCard
             planMarkdown={row.proposedPlan.planMarkdown}
-            cwd={markdownCwd}
+            cwd={markdownCwd ?? undefined}
             workspaceRoot={workspaceRoot}
           />
         </div>
@@ -708,25 +725,25 @@ type TimelineProposedPlan = Extract<TimelineEntry, { kind: "proposed-plan" }>["p
 type TimelineWorkEntry = Extract<TimelineEntry, { kind: "work" }>["entry"];
 type TimelineRow =
   | {
-    kind: "work";
-    id: string;
-    createdAt: string;
-    groupedEntries: TimelineWorkEntry[];
-  }
+      kind: "work";
+      id: string;
+      createdAt: string;
+      groupedEntries: TimelineWorkEntry[];
+    }
   | {
-    kind: "message";
-    id: string;
-    createdAt: string;
-    message: TimelineMessage;
-    durationStart: string;
-    showCompletionDivider: boolean;
-  }
+      kind: "message";
+      id: string;
+      createdAt: string;
+      message: TimelineMessage;
+      durationStart: string;
+      showCompletionDivider: boolean;
+    }
   | {
-    kind: "proposed-plan";
-    id: string;
-    createdAt: string;
-    proposedPlan: TimelineProposedPlan;
-  }
+      kind: "proposed-plan";
+      id: string;
+      createdAt: string;
+      proposedPlan: TimelineProposedPlan;
+    }
   | { kind: "working"; id: string; createdAt: string | null };
 
 function estimateTimelineProposedPlanHeight(proposedPlan: TimelineProposedPlan): number {

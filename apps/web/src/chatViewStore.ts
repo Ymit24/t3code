@@ -17,7 +17,8 @@ export type ChatViewStoreState = {
   expandedImage: ExpandedImagePreview | null;
 
   increaseTerminalFocusRequestId: () => void;
-  openExpandImage: (expandedImage: ExpandedImagePreview | null) => void;
+  openExpandImage: (expandedImage: ExpandedImagePreview) => void;
+  closeExpandedImage: () => void;
 };
 
 export function createChatViewStore(threadId: ThreadId) {
@@ -33,6 +34,9 @@ export function createChatViewStore(threadId: ThreadId) {
       set((state) => ({ terminalFocusRequestId: state.terminalFocusRequestId + 1 })),
     openExpandImage: (preview) => {
       set({ expandedImage: preview });
+    },
+    closeExpandedImage: () => {
+      set({ expandedImage: null });
     },
   }));
 }
