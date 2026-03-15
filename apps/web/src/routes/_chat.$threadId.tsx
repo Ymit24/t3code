@@ -2,7 +2,7 @@ import { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, type ReactNode, useCallback, useEffect, useState } from "react";
 
-import ChatView from "../components/ChatView";
+import ChatView, { ChatViewWrapper } from "../components/ChatView";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
@@ -115,8 +115,8 @@ const DiffPanelInlineSidebar = (props: {
       const composerRightActionsWidth = composerRightActions?.getBoundingClientRect().width ?? 0;
       const composerFooterGap = composerFooter
         ? Number.parseFloat(window.getComputedStyle(composerFooter).columnGap) ||
-          Number.parseFloat(window.getComputedStyle(composerFooter).gap) ||
-          0
+        Number.parseFloat(window.getComputedStyle(composerFooter).gap) ||
+        0
         : 0;
       const minimumComposerWidth =
         COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX + composerRightActionsWidth + composerFooterGap;
@@ -222,7 +222,7 @@ function ChatThreadRouteView() {
     return (
       <>
         <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView key={threadId} threadId={threadId} />
+          <ChatViewWrapper key={threadId} threadId={threadId} />
         </SidebarInset>
         <DiffPanelInlineSidebar
           diffOpen={diffOpen}

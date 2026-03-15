@@ -5,9 +5,9 @@ import {
   type VirtualItem,
   useVirtualizer,
 } from "@tanstack/react-virtual";
-import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
+import { deriveActiveWorkStartedAt, deriveTimelineEntries, formatElapsed, isLatestTurnSettled } from "../../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX } from "../../chat-scroll";
-import { type TurnDiffSummary } from "../../types";
+import { Thread, type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import ChatMarkdown from "../ChatMarkdown";
 import {
@@ -27,68 +27,198 @@ import {
 import { Button } from "../ui/button";
 import { clamp } from "effect/Number";
 import { estimateTimelineMessageHeight } from "../timelineHeight";
-import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
+import { buildExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
 import { cn } from "~/lib/utils";
-import { type TimestampFormat } from "../../appSettings";
+import { useAppSettings, type TimestampFormat } from "../../appSettings";
 import { formatTimestamp } from "../../timestampFormat";
+import usePhase from "~/hooks/chat/usePhase";
+import useTimelineEntries from "~/hooks/chat/useTimelineEntries";
+import { useTurnDiffSummaries } from "~/hooks/useTurnDiffSummaries";
+import { useNavigate } from "@tanstack/react-router";
+import { stripDiffSearchParams } from "~/diffRouteSearch";
+import { useChatViewStore } from "../ChatViewStoreProvider";
+import { useTheme } from "~/hooks/useTheme";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 
 interface MessagesTimelineProps {
+  activeThread: Thread;
   hasMessages: boolean;
-  isWorking: boolean;
-  activeTurnInProgress: boolean;
-  activeTurnStartedAt: string | null;
   scrollContainer: HTMLDivElement | null;
-  timelineEntries: ReturnType<typeof deriveTimelineEntries>;
-  completionDividerBeforeEntryId: string | null;
-  completionSummary: string | null;
-  turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
-  nowIso: string;
-  expandedWorkGroups: Record<string, boolean>;
-  onToggleWorkGroup: (groupId: string) => void;
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-  revertTurnCountByUserMessageId: Map<MessageId, number>;
-  onRevertUserMessage: (messageId: MessageId) => void;
-  isRevertingCheckpoint: boolean;
-  onImageExpand: (preview: ExpandedImagePreview) => void;
-  markdownCwd: string | undefined;
-  resolvedTheme: "light" | "dark";
-  timestampFormat: TimestampFormat;
-  workspaceRoot: string | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  activeThread,
   hasMessages,
-  isWorking,
-  activeTurnInProgress,
-  activeTurnStartedAt,
   scrollContainer,
-  timelineEntries,
-  completionDividerBeforeEntryId,
-  completionSummary,
-  turnDiffSummaryByAssistantMessageId,
-  nowIso,
-  expandedWorkGroups,
-  onToggleWorkGroup,
-  onOpenTurnDiff,
-  revertTurnCountByUserMessageId,
-  onRevertUserMessage,
-  isRevertingCheckpoint,
-  onImageExpand,
-  markdownCwd,
-  resolvedTheme,
-  timestampFormat,
-  workspaceRoot,
 }: MessagesTimelineProps) {
+  const { resolvedTheme } = useTheme();
+  const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
+
+  const onToggleWorkGroup = useCallback((groupId: string) => {
+    setExpandedWorkGroups((existing) => ({
+      ...existing,
+      [groupId]: !existing[groupId],
+    }));
+  }, []);
+
+  // TODO: Is this needed?
+  useEffect(() => {
+    setExpandedWorkGroups({});
+  }, [activeThread?.id]);
+
+
+  const { settings } = useAppSettings();
+  const timestampFormat = settings.timestampFormat;
+
+  const markdownCwd = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
+
+  const workspaceRoot = activeProject?.cwd;
+
+  const isRevertingCheckpoint = useChatViewStore((store) => store.isRevertingCheckpoint);
+  const onImageExpand = useChatViewStore((store) => store.openExpandImage);
+
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+
+  const { isWorking } = usePhase(activeThread);
+  const { timelineEntries } = useTimelineEntries(activeThread);
+
+  const activeLatestTurn = activeThread?.latestTurn ?? null;
+  const activeTurnStartedAt = deriveActiveWorkStartedAt(
+    activeLatestTurn,
+    activeThread?.session ?? null,
+    sendStartedAt,
+  );
+
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  const activeTurnInProgress = isWorking || !latestTurnSettled;
+
+  const completionSummary = useMemo(() => {
+    if (!latestTurnSettled) return null;
+    if (!activeLatestTurn?.startedAt) return null;
+    if (!activeLatestTurn.completedAt) return null;
+    if (!latestTurnHasToolActivity) return null;
+
+    const elapsed = formatElapsed(activeLatestTurn.startedAt, activeLatestTurn.completedAt);
+    return elapsed ? `Worked for ${elapsed}` : null;
+  }, [
+    activeLatestTurn?.completedAt,
+    activeLatestTurn?.startedAt,
+    latestTurnHasToolActivity,
+    latestTurnSettled,
+  ]);
+
+  const navigate = useNavigate();
+  const onOpenTurnDiff = useCallback(
+    (turnId: TurnId, filePath?: string) => {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: activeThread.id },
+        search: (previous) => {
+          const rest = stripDiffSearchParams(previous);
+          return filePath
+            ? { ...rest, diff: "1", diffTurnId: turnId, diffFilePath: filePath }
+            : { ...rest, diff: "1", diffTurnId: turnId };
+        },
+      });
+    },
+    [navigate, activeThread.id],
+  );
+
+  const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
+    useTurnDiffSummaries(activeThread);
+  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
+    const byMessageId = new Map<MessageId, TurnDiffSummary>();
+    for (const summary of turnDiffSummaries) {
+      if (!summary.assistantMessageId) continue;
+      byMessageId.set(summary.assistantMessageId, summary);
+    }
+    return byMessageId;
+  }, [turnDiffSummaries]);
+
+  const revertTurnCountByUserMessageId = useMemo(() => {
+    const byUserMessageId = new Map<MessageId, number>();
+    for (let index = 0; index < timelineEntries.length; index += 1) {
+      const entry = timelineEntries[index];
+      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
+        continue;
+      }
+
+      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
+        const nextEntry = timelineEntries[nextIndex];
+        if (!nextEntry || nextEntry.kind !== "message") {
+          continue;
+        }
+        if (nextEntry.message.role === "user") {
+          break;
+        }
+        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
+        if (!summary) {
+          continue;
+        }
+        const turnCount =
+          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
+        if (typeof turnCount !== "number") {
+          break;
+        }
+        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
+        break;
+      }
+    }
+
+    return byUserMessageId;
+  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+
+  const nowIso = new Date(nowTick).toISOString();
+
+  const completionDividerBeforeEntryId = useMemo(() => {
+    if (!latestTurnSettled) return null;
+    if (!activeLatestTurn?.startedAt) return null;
+    if (!activeLatestTurn.completedAt) return null;
+    if (!completionSummary) return null;
+
+    const turnStartedAt = Date.parse(activeLatestTurn.startedAt);
+    const turnCompletedAt = Date.parse(activeLatestTurn.completedAt);
+    if (Number.isNaN(turnStartedAt)) return null;
+    if (Number.isNaN(turnCompletedAt)) return null;
+
+    let inRangeMatch: string | null = null;
+    let fallbackMatch: string | null = null;
+    for (const timelineEntry of timelineEntries) {
+      if (timelineEntry.kind !== "message") continue;
+      if (timelineEntry.message.role !== "assistant") continue;
+      const messageAt = Date.parse(timelineEntry.message.createdAt);
+      if (Number.isNaN(messageAt) || messageAt < turnStartedAt) continue;
+      fallbackMatch = timelineEntry.id;
+      if (messageAt <= turnCompletedAt) {
+        inRangeMatch = timelineEntry.id;
+      }
+    }
+    return inRangeMatch ?? fallbackMatch;
+  }, [
+    activeLatestTurn?.completedAt,
+    activeLatestTurn?.startedAt,
+    completionSummary,
+    latestTurnSettled,
+    timelineEntries,
+  ]);
+
+  const onRevertUserMessage = (messageId: MessageId) => {
+    const targetTurnCount = revertTurnCountByUserMessageId.get(messageId);
+    if (typeof targetTurnCount !== "number") {
+      return;
+    }
+    void onRevertToTurnCount(targetTurnCount);
+  };
+
+  ////////////
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -578,25 +708,25 @@ type TimelineProposedPlan = Extract<TimelineEntry, { kind: "proposed-plan" }>["p
 type TimelineWorkEntry = Extract<TimelineEntry, { kind: "work" }>["entry"];
 type TimelineRow =
   | {
-      kind: "work";
-      id: string;
-      createdAt: string;
-      groupedEntries: TimelineWorkEntry[];
-    }
+    kind: "work";
+    id: string;
+    createdAt: string;
+    groupedEntries: TimelineWorkEntry[];
+  }
   | {
-      kind: "message";
-      id: string;
-      createdAt: string;
-      message: TimelineMessage;
-      durationStart: string;
-      showCompletionDivider: boolean;
-    }
+    kind: "message";
+    id: string;
+    createdAt: string;
+    message: TimelineMessage;
+    durationStart: string;
+    showCompletionDivider: boolean;
+  }
   | {
-      kind: "proposed-plan";
-      id: string;
-      createdAt: string;
-      proposedPlan: TimelineProposedPlan;
-    }
+    kind: "proposed-plan";
+    id: string;
+    createdAt: string;
+    proposedPlan: TimelineProposedPlan;
+  }
   | { kind: "working"; id: string; createdAt: string | null };
 
 function estimateTimelineProposedPlanHeight(proposedPlan: TimelineProposedPlan): number {
