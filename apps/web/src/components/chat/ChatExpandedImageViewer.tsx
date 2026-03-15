@@ -1,4 +1,11 @@
+import { ChevronLeftIcon, XIcon, ChevronRightIcon } from "lucide-react";
+import { Button } from "../ui/button";
+import { useChatViewStore } from "../ChatViewStoreProvider";
+
 export default function ChatExpandedImageViewer() {
+  const expandedImage = useChatViewStore((store) => store.expandedImage);
+  const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
+
   return (
     { expandedImage && expandedImageItem && (
       <div

@@ -13,7 +13,12 @@ import {
   PanelRightCloseIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
-import { deriveActivePlanState, findLatestProposedPlan, isLatestTurnSettled, type ActivePlanState } from "../session-logic";
+import {
+  deriveActivePlanState,
+  findLatestProposedPlan,
+  isLatestTurnSettled,
+  type ActivePlanState,
+} from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import {
@@ -55,9 +60,7 @@ interface PlanSidebarProps {
   onClose: () => void;
 }
 
-const PlanSidebar = memo(function PlanSidebar({
-  onClose,
-}: PlanSidebarProps) {
+const PlanSidebar = memo(function PlanSidebar({ onClose }: PlanSidebarProps) {
   const { settings } = useAppSettings();
   const timestampFormat = settings.timestampFormat;
   const workspaceRoot = activeProject?.cwd ?? undefined;

@@ -12,9 +12,9 @@ export type ChatViewStoreState = {
   isRevertingCheckpoint: boolean;
 
   optimisticUserMessages: ChatMessage[];
-  expandedImage: ExpandedImagePreview | null;
-
   pullRequestDialogState: PullRequestDialogState | null;
+
+  expandedImage: ExpandedImagePreview | null;
 
   increaseTerminalFocusRequestId: () => void;
   openExpandImage: (expandedImage: ExpandedImagePreview | null) => void;
@@ -29,9 +29,10 @@ export function createChatViewStore(threadId: ThreadId) {
     optimisticUserMessages: [],
     expandedImage: null,
     pullRequestDialogState: null,
-    increaseTerminalFocusRequestId: () => set((state) => ({ terminalFocusRequestId: state.terminalFocusRequestId + 1 })),
+    increaseTerminalFocusRequestId: () =>
+      set((state) => ({ terminalFocusRequestId: state.terminalFocusRequestId + 1 })),
     openExpandImage: (preview) => {
       set({ expandedImage: preview });
     },
   }));
-};
+}

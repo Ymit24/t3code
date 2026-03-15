@@ -7,12 +7,8 @@ import {
   type ThreadId,
   OrchestrationThreadActivity,
 } from "@t3tools/contracts";
-import {
-  type PendingUserInputDraftAnswer,
-} from "../pendingUserInput";
-import {
-  Thread,
-} from "../types";
+import { type PendingUserInputDraftAnswer } from "../pendingUserInput";
+import { Thread } from "../types";
 import BranchToolbar from "./BranchToolbar";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -172,5 +168,5 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
       })()}
       <ChatExpandedImageViewer />
     </div>
-  )
+  );
 }
