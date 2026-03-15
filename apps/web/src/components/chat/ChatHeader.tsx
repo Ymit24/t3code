@@ -29,6 +29,7 @@ import useProjectScripts from "~/hooks/chat/useProjectScripts";
 import useToggleDiff from "~/hooks/chat/useToggleDiff";
 import { cn } from "~/lib/utils";
 import { isElectron } from "~/env";
+import useGitCwd from "~/hooks/chat/useGitCwd";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
@@ -50,10 +51,10 @@ export const ChatHeader = memo(function ChatHeader({
     deleteProjectScript,
   } = useProjectScripts(activeThread);
 
-  const gitCwd = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
+  const gitCwd = useGitCwd(activeThread, activeProject);
 
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
+  const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd ?? null));
 
   const isGitRepo = branchesQuery.data?.isRepo ?? true;
 

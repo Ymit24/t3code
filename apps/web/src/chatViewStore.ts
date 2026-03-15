@@ -1,6 +1,6 @@
 import { ThreadId } from "@t3tools/contracts";
 import { createStore } from "zustand";
-import { SendPhase } from "./components/ChatView.logic";
+import { PullRequestDialogState, SendPhase } from "./components/ChatView.logic";
 import { ChatMessage } from "./types";
 import { ExpandedImagePreview } from "./components/chat/ExpandedImagePreview";
 
@@ -14,6 +14,8 @@ export type ChatViewStoreState = {
   optimisticUserMessages: ChatMessage[];
   expandedImage: ExpandedImagePreview | null;
 
+  pullRequestDialogState: PullRequestDialogState | null;
+
   increaseTerminalFocusRequestId: () => void;
   openExpandImage: (expandedImage: ExpandedImagePreview | null) => void;
 };
@@ -26,6 +28,7 @@ export function createChatViewStore(threadId: ThreadId) {
     isRevertingCheckpoint: false,
     optimisticUserMessages: [],
     expandedImage: null,
+    pullRequestDialogState: null,
     increaseTerminalFocusRequestId: () => set((state) => ({ terminalFocusRequestId: state.terminalFocusRequestId + 1 })),
     openExpandImage: (preview) => {
       set({ expandedImage: preview });

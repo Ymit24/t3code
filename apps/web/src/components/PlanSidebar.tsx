@@ -1,5 +1,5 @@
-import { memo, useState, useCallback } from "react";
-import { type TimestampFormat } from "../appSettings";
+import { memo, useState, useCallback, useMemo } from "react";
+import { useAppSettings, type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
@@ -13,7 +13,7 @@ import {
   PanelRightCloseIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
-import type { ActivePlanState } from "../session-logic";
+import { deriveActivePlanState, findLatestProposedPlan, isLatestTurnSettled, type ActivePlanState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import {
@@ -27,6 +27,7 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { readNativeApi } from "~/nativeApi";
 import { toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import useGitCwd from "~/hooks/chat/useGitCwd";
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -51,22 +52,34 @@ function stepStatusIcon(status: string): React.ReactNode {
 }
 
 interface PlanSidebarProps {
-  activePlan: ActivePlanState | null;
-  activeProposedPlan: LatestProposedPlanState | null;
-  markdownCwd: string | undefined;
-  workspaceRoot: string | undefined;
-  timestampFormat: TimestampFormat;
   onClose: () => void;
 }
 
 const PlanSidebar = memo(function PlanSidebar({
-  activePlan,
-  activeProposedPlan,
-  markdownCwd,
-  workspaceRoot,
-  timestampFormat,
   onClose,
 }: PlanSidebarProps) {
+  const { settings } = useAppSettings();
+  const timestampFormat = settings.timestampFormat;
+  const workspaceRoot = activeProject?.cwd ?? undefined;
+  const markdownCwd = useGitCwd(activeThread, activeProject);
+  const activeLatestTurn = activeThread?.latestTurn ?? null;
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+
+  const activeProposedPlan = useMemo(() => {
+    if (!latestTurnSettled) {
+      return null;
+    }
+    return findLatestProposedPlan(
+      activeThread?.proposedPlans ?? [],
+      activeLatestTurn?.turnId ?? null,
+    );
+  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
+
+  const activePlan = useMemo(
+    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, threadActivities],
+  );
+
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
