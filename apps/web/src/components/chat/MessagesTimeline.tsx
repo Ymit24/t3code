@@ -1,4 +1,4 @@
-import { type MessageId, type TurnId } from "@t3tools/contracts";
+import { OrchestrationThreadActivity, type MessageId, type TurnId } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   measureElement as measureVirtualElement,
@@ -9,6 +9,7 @@ import {
   deriveActiveWorkStartedAt,
   deriveTimelineEntries,
   formatElapsed,
+  hasToolActivityForTurn,
   isLatestTurnSettled,
 } from "../../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX } from "../../chat-scroll";
@@ -38,7 +39,7 @@ import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
-import { cn } from "~/lib/utils";
+import { cn, newCommandId } from "~/lib/utils";
 import { useAppSettings, type TimestampFormat } from "../../appSettings";
 import { formatTimestamp } from "../../timestampFormat";
 import usePhase from "~/hooks/chat/usePhase";
@@ -49,9 +50,12 @@ import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { useChatViewStore } from "../ChatViewStoreProvider";
 import { useTheme } from "~/hooks/useTheme";
 import { useActiveProject } from "~/hooks/chat/useActiveProject";
+import { readNativeApi } from "~/nativeApi";
+import useSetThreadError from "~/hooks/chat/useSetThreadError";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
+const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 
 interface MessagesTimelineProps {
   activeThread: Thread;
@@ -85,7 +89,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const workspaceRoot = activeProject?.cwd;
 
-  const isRevertingCheckpoint = useChatViewStore((store) => store.isRevertingCheckpoint);
   const onImageExpand = useChatViewStore((store) => store.openExpandImage);
 
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
@@ -94,6 +97,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const { isWorking } = usePhase(activeThread);
   const { timelineEntries } = useTimelineEntries(activeThread);
   const hasMessages = timelineEntries.length > 0;
+
+  const sendStartedAt = useChatViewStore((store) => store.sendStartedAt);
 
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const activeTurnStartedAt = deriveActiveWorkStartedAt(
@@ -105,7 +110,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeTurnInProgress = isWorking || !latestTurnSettled;
 
-  const { phase } = usePhase(activeThread);
+  const { phase, isSendBusy } = usePhase(activeThread);
+
+  // TODO: make this nowTick/nowIso not suck
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     if (phase !== "running") return;
@@ -116,6 +123,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       window.clearInterval(timer);
     };
   }, [phase]);
+
+  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const latestTurnHasToolActivity = useMemo(
+    () => hasToolActivityForTurn(threadActivities, activeLatestTurn?.turnId),
+    [activeLatestTurn?.turnId, threadActivities],
+  );
 
   const completionSummary = useMemo(() => {
     if (!latestTurnSettled) return null;
@@ -226,6 +239,60 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     latestTurnSettled,
     timelineEntries,
   ]);
+
+  const setThreadError = useSetThreadError();
+
+  const isRevertingCheckpoint = useChatViewStore((store) => store.isRevertingCheckpoint);
+  const setIsRevertingCheckpoint = useChatViewStore((store) => store.setIsRevertingCheckpoint);
+
+  const onRevertToTurnCount = useCallback(
+    async (turnCount: number) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || isRevertingCheckpoint) return;
+
+      // isConnecting doesn't seem to do anything anymore
+      if (phase === "running" || isSendBusy /* || isConnecting */) {
+        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+        return;
+      }
+      const confirmed = await api.dialogs.confirm(
+        [
+          `Revert this thread to checkpoint ${turnCount}?`,
+          "This will discard newer messages and turn diffs in this thread.",
+          "This action cannot be undone.",
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setIsRevertingCheckpoint(true);
+      setThreadError(activeThread.id, null);
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.checkpoint.revert",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          turnCount,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to revert thread state.",
+        );
+      }
+      setIsRevertingCheckpoint(false);
+    },
+    [
+      activeThread,
+      isRevertingCheckpoint,
+      isSendBusy,
+      phase,
+      setThreadError,
+      setIsRevertingCheckpoint,
+    ],
+  );
 
   const onRevertUserMessage = (messageId: MessageId) => {
     const targetTurnCount = revertTurnCountByUserMessageId.get(messageId);
