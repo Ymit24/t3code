@@ -6,6 +6,7 @@ import {
   type ServerProviderStatus,
   type ThreadId,
   OrchestrationThreadActivity,
+  TurnId,
 } from "@t3tools/contracts";
 import { type PendingUserInputDraftAnswer } from "../pendingUserInput";
 import { Thread } from "../types";
@@ -23,11 +24,12 @@ import ChatExpandedImageViewer from "./chat/ChatExpandedImageViewer";
 import { ChatMessageTimelineArea } from "./chat/ChatMessageTimelineArea";
 import { useActiveProject } from "~/hooks/chat/useActiveProject";
 import useActiveThread from "~/hooks/chat/useActiveThread";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import useIsServerThread from "~/hooks/chat/useIsServer";
 import ChatBanners from "./chat/ChatBanners";
 import useIsGitRepo from "~/hooks/chat/useIsGitRepo";
 import useGitCwd from "~/hooks/chat/useGitCwd";
+import useActivePlan from "~/hooks/chat/useActivePlan";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -104,6 +106,12 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
 
   const gitCwd = useGitCwd(activeThread);
   const isGitRepo = useIsGitRepo(activeThread);
+
+  const planSidebarOpen = useChatViewStore((state) => state.planSidebarOpen);
+  const setPlanSidebarOpen = useChatViewStore((state) => state.setPlanSidebarOpen);
+
+  const planSidebarDismissedForTurnRef = useRef<TurnId | null>(null);
+  const { activePlan, activeProposedPlan } = useActivePlan(activeThread);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">

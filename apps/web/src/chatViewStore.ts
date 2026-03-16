@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, ThreadSessionSetPayload } from "@t3tools/contracts";
 import { createStore } from "zustand";
 import { PullRequestDialogState, SendPhase } from "./components/ChatView.logic";
 import { ChatMessage } from "./types";
@@ -32,6 +32,9 @@ export type ChatViewStoreState = {
 
   composerFocusRequestId: number;
   focusComposer: () => void;
+
+  planSidebarOpen: boolean;
+  setPlanSidebarOpen: (planSidebarOpen: boolean) => void;
 };
 
 export function createChatViewStore(threadId: ThreadId) {
@@ -67,6 +70,10 @@ export function createChatViewStore(threadId: ThreadId) {
     },
     setSendStartedAt: (sendStartedAt) => {
       set({ sendStartedAt });
+    },
+    planSidebarOpen: false,
+    setPlanSidebarOpen: (planSidebarOpen) => {
+      set({ planSidebarOpen });
     },
   }));
 }

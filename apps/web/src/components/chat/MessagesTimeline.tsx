@@ -52,10 +52,10 @@ import { useTheme } from "~/hooks/useTheme";
 import { useActiveProject } from "~/hooks/chat/useActiveProject";
 import { readNativeApi } from "~/nativeApi";
 import useSetThreadError from "~/hooks/chat/useSetThreadError";
+import useThreadActivities from "~/hooks/chat/useThreadActivities";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
-const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 
 interface MessagesTimelineProps {
   activeThread: Thread;
@@ -124,11 +124,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [phase]);
 
-  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
-  const latestTurnHasToolActivity = useMemo(
-    () => hasToolActivityForTurn(threadActivities, activeLatestTurn?.turnId),
-    [activeLatestTurn?.turnId, threadActivities],
-  );
+  const { latestTurnHasToolActivity } = useThreadActivities(activeThread);
 
   const completionSummary = useMemo(() => {
     if (!latestTurnSettled) return null;
