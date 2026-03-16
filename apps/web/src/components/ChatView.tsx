@@ -30,6 +30,8 @@ import ChatBanners from "./chat/ChatBanners";
 import useIsGitRepo from "~/hooks/chat/useIsGitRepo";
 import useGitCwd from "~/hooks/chat/useGitCwd";
 import useActivePlan from "~/hooks/chat/useActivePlan";
+import { threadId } from "worker_threads";
+import { useTerminalStateStore, selectThreadTerminalState } from "~/terminalStateStore";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -113,6 +115,10 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
   const planSidebarDismissedForTurnRef = useRef<TurnId | null>(null);
   const { activePlan, activeProposedPlan } = useActivePlan(activeThread);
 
+  const terminalState = useTerminalStateStore((state) =>
+    selectThreadTerminalState(state.terminalStateByThreadId, activeThread.id),
+  );
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
@@ -178,28 +184,7 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
         if (!terminalState.terminalOpen || !activeProject) {
           return null;
         }
-        return (
-          <ThreadTerminalDrawer
-            key={activeThread.id}
-            threadId={activeThread.id}
-            cwd={gitCwd ?? activeProject.cwd}
-            runtimeEnv={threadTerminalRuntimeEnv}
-            height={terminalState.terminalHeight}
-            terminalIds={terminalState.terminalIds}
-            activeTerminalId={terminalState.activeTerminalId}
-            terminalGroups={terminalState.terminalGroups}
-            activeTerminalGroupId={terminalState.activeTerminalGroupId}
-            focusRequestId={terminalFocusRequestId}
-            onSplitTerminal={splitTerminal}
-            onNewTerminal={createNewTerminal}
-            splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
-            newShortcutLabel={newTerminalShortcutLabel ?? undefined}
-            closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
-            onActiveTerminalChange={activateTerminal}
-            onCloseTerminal={closeTerminal}
-            onHeightChange={setTerminalHeight}
-          />
-        );
+        return <ThreadTerminalDrawer key={activeThread.id} activeThread={activeThread} />;
       })()}
       <ChatExpandedImageViewer />
     </div>

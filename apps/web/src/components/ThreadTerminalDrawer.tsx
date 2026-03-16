@@ -18,14 +18,26 @@ import {
   isTerminalLinkActivation,
   resolvePathLinkTarget,
 } from "../terminal-links";
-import { isTerminalClearShortcut, terminalNavigationShortcutData } from "../keybindings";
+import {
+  isTerminalClearShortcut,
+  shortcutLabelForCommand,
+  terminalNavigationShortcutData,
+} from "../keybindings";
 import {
   DEFAULT_THREAD_TERMINAL_HEIGHT,
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
+  Thread,
   type ThreadTerminalGroup,
 } from "../types";
 import { readNativeApi } from "~/nativeApi";
+import { useActiveProject } from "~/hooks/chat/useActiveProject";
+import { projectScriptRuntimeEnv } from "~/projectScripts";
+import { useChatViewStore } from "./ChatViewStoreProvider";
+import { randomUUID } from "~/lib/utils";
+import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
+import useGitCwd from "~/hooks/chat/useGitCwd";
+import { useKeybindings } from "~/hooks/chat/useKeybindings";
 
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
@@ -433,26 +445,6 @@ function TerminalViewport({
   return <div ref={containerRef} className="h-full w-full overflow-hidden rounded-[4px]" />;
 }
 
-interface ThreadTerminalDrawerProps {
-  threadId: ThreadId;
-  cwd: string;
-  runtimeEnv?: Record<string, string>;
-  height: number;
-  terminalIds: string[];
-  activeTerminalId: string;
-  terminalGroups: ThreadTerminalGroup[];
-  activeTerminalGroupId: string;
-  focusRequestId: number;
-  onSplitTerminal: () => void;
-  onNewTerminal: () => void;
-  splitShortcutLabel?: string | undefined;
-  newShortcutLabel?: string | undefined;
-  closeShortcutLabel?: string | undefined;
-  onActiveTerminalChange: (terminalId: string) => void;
-  onCloseTerminal: (terminalId: string) => void;
-  onHeightChange: (height: number) => void;
-}
-
 interface TerminalActionButtonProps {
   label: string;
   className: string;
@@ -482,25 +474,144 @@ function TerminalActionButton({ label, className, onClick, children }: TerminalA
   );
 }
 
-export default function ThreadTerminalDrawer({
-  threadId,
-  cwd,
-  runtimeEnv,
-  height,
-  terminalIds,
-  activeTerminalId,
-  terminalGroups,
-  activeTerminalGroupId,
-  focusRequestId,
-  onSplitTerminal,
-  onNewTerminal,
-  splitShortcutLabel,
-  newShortcutLabel,
-  closeShortcutLabel,
-  onActiveTerminalChange,
-  onCloseTerminal,
-  onHeightChange,
-}: ThreadTerminalDrawerProps) {
+interface ThreadTerminalDrawerProps {
+  activeThread: Thread;
+}
+
+export default function ThreadTerminalDrawer({ activeThread }: ThreadTerminalDrawerProps) {
+  const threadId = activeThread.id;
+  // NOTE: We know we have an active project, the rendering of this component gaurds for it.
+  const activeProject = useActiveProject(activeThread)!;
+  /////
+  const gitCwd = useGitCwd(activeThread);
+  const cwd = gitCwd ?? activeProject?.cwd;
+  const activeProjectCwd = activeProject?.cwd ?? null;
+  const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
+  const runtimeEnv = useMemo(() => {
+    if (!activeProjectCwd) return {};
+    return projectScriptRuntimeEnv({
+      project: {
+        cwd: activeProjectCwd,
+      },
+      worktreePath: activeThreadWorktreePath,
+    });
+  }, [activeProjectCwd, activeThreadWorktreePath]);
+
+  const focusRequestId = useChatViewStore((store) => store.terminalFocusRequestId);
+  const increaseTerminalFocusRequestId = useChatViewStore(
+    (store) => store.increaseTerminalFocusRequestId,
+  );
+
+  const terminalState = useTerminalStateStore((state) =>
+    selectThreadTerminalState(state.terminalStateByThreadId, activeThread.id),
+  );
+  const storeSplitTerminal = useTerminalStateStore((s) => s.splitTerminal);
+  const storeNewTerminal = useTerminalStateStore((s) => s.newTerminal);
+  const storeSetActiveTerminal = useTerminalStateStore((s) => s.setActiveTerminal);
+  const storeCloseTerminal = useTerminalStateStore((s) => s.closeTerminal);
+  const storeSetTerminalHeight = useTerminalStateStore((s) => s.setTerminalHeight);
+
+  const height = terminalState.terminalHeight;
+  const terminalIds = terminalState.terminalIds;
+  const activeTerminalId = terminalState.activeTerminalId;
+  const terminalGroups = terminalState.terminalGroups;
+  const activeTerminalGroupId = terminalState.activeTerminalGroupId;
+
+  const activeTerminalGroup =
+    terminalState.terminalGroups.find(
+      (group) => group.id === terminalState.activeTerminalGroupId,
+    ) ??
+    terminalState.terminalGroups.find((group) =>
+      group.terminalIds.includes(terminalState.activeTerminalId),
+    ) ??
+    null;
+
+  const hasReachedSplitLimitTwo =
+    (activeTerminalGroup?.terminalIds.length ?? 0) >= MAX_TERMINALS_PER_GROUP;
+
+  const onHeightChange = useCallback(
+    (height: number) => {
+      if (!activeThread.id) return;
+      storeSetTerminalHeight(activeThread.id, height);
+    },
+    [activeThread, storeSetTerminalHeight],
+  );
+
+  const onSplitTerminal = useCallback(() => {
+    if (!activeThread.id || hasReachedSplitLimitTwo) return;
+    const terminalId = `terminal-${randomUUID()}`;
+    storeSplitTerminal(activeThread.id, terminalId);
+    increaseTerminalFocusRequestId();
+  }, [activeThread, hasReachedSplitLimitTwo, storeSplitTerminal, increaseTerminalFocusRequestId]);
+
+  const onNewTerminal = useCallback(() => {
+    if (!activeThread.id) return;
+    const terminalId = `terminal-${randomUUID()}`;
+    storeNewTerminal(activeThread.id, terminalId);
+    increaseTerminalFocusRequestId();
+  }, [activeThread.id, storeNewTerminal, increaseTerminalFocusRequestId]);
+
+  const onActiveTerminalChange = useCallback(
+    (terminalId: string) => {
+      if (!activeThread.id) return;
+      storeSetActiveTerminal(activeThread.id, terminalId);
+      increaseTerminalFocusRequestId();
+    },
+    [activeThread, storeSetActiveTerminal, increaseTerminalFocusRequestId],
+  );
+  const onCloseTerminal = useCallback(
+    (terminalId: string) => {
+      const api = readNativeApi();
+      if (!activeThread.id || !api) return;
+      const isFinalTerminal = terminalState.terminalIds.length <= 1;
+      const fallbackExitWrite = () =>
+        api.terminal
+          .write({ threadId: activeThread.id, terminalId, data: "exit\n" })
+          .catch(() => undefined);
+      if ("close" in api.terminal && typeof api.terminal.close === "function") {
+        void (async () => {
+          if (isFinalTerminal) {
+            await api.terminal
+              .clear({ threadId: activeThread.id, terminalId })
+              .catch(() => undefined);
+          }
+          await api.terminal.close({
+            threadId: activeThread.id,
+            terminalId,
+            deleteHistory: true,
+          });
+        })().catch(() => fallbackExitWrite());
+      } else {
+        void fallbackExitWrite();
+      }
+      storeCloseTerminal(activeThread.id, terminalId);
+      increaseTerminalFocusRequestId();
+    },
+    [
+      activeThread,
+      storeCloseTerminal,
+      terminalState.terminalIds.length,
+      increaseTerminalFocusRequestId,
+    ],
+  );
+
+  const keybindings = useKeybindings();
+
+  const splitShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "terminal.split"),
+    [keybindings],
+  );
+  const newShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "terminal.new"),
+    [keybindings],
+  );
+  const closeShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "terminal.close"),
+    [keybindings],
+  );
+
+  ///////////
+
   const [drawerHeight, setDrawerHeight] = useState(() => clampDrawerHeight(height));
   const [resizeEpoch, setResizeEpoch] = useState(0);
   const drawerHeightRef = useRef(drawerHeight);
