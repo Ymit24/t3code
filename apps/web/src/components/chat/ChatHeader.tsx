@@ -24,12 +24,12 @@ import {
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
 } from "../ChatView.logic";
-import { useActiveProject } from "../ChatView";
 import useProjectScripts from "~/hooks/chat/useProjectScripts";
 import useToggleDiff from "~/hooks/chat/useToggleDiff";
 import { cn } from "~/lib/utils";
 import { isElectron } from "~/env";
 import useGitCwd from "~/hooks/chat/useGitCwd";
+import { useActiveProject } from "~/hooks/chat/useActiveProject";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
@@ -38,20 +38,14 @@ interface ChatHeaderProps {
   activeThread: Thread;
 }
 
-export const ChatHeader = memo(function ChatHeader({
-  activeThread,
-}: ChatHeaderProps) {
+export const ChatHeader = memo(function ChatHeader({ activeThread }: ChatHeaderProps) {
   const activeProject = useActiveProject(activeThread);
   const { onToggleDiff } = useToggleDiff(activeThread.id);
 
-  const {
-    runProjectScript,
-    saveProjectScript,
-    updateProjectScript,
-    deleteProjectScript,
-  } = useProjectScripts(activeThread);
+  const { runProjectScript, saveProjectScript, updateProjectScript, deleteProjectScript } =
+    useProjectScripts(activeThread);
 
-  const gitCwd = useGitCwd(activeThread, activeProject);
+  const gitCwd = useGitCwd(activeThread);
 
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd ?? null));
@@ -136,7 +130,7 @@ export const ChatHeader = memo(function ChatHeader({
             />
           )}
           {activeProjectName && (
-            <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThread.id} />
+            <GitActionsControl gitCwd={gitCwd ?? null} activeThreadId={activeThread.id} />
           )}
           <Tooltip>
             <TooltipTrigger

@@ -7,8 +7,9 @@ import { ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
+import { Thread } from "~/types";
 
-export default function ChatInputBar() {
+export default function ChatInputBar({ activeThread }: { activeThread: Thread }) {
   return (
     <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
       <form
@@ -18,8 +19,9 @@ export default function ChatInputBar() {
         data-chat-composer-form="true"
       >
         <div
-          className={`group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
-            }`}
+          className={`group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
+            isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
+          }`}
           onDragEnter={onComposerDragEnter}
           onDragOver={onComposerDragOver}
           onDragLeave={onComposerDragLeave}
@@ -75,9 +77,7 @@ export default function ChatInputBar() {
 
             {!isComposerApprovalState &&
               pendingUserInputs.length === 0 &&
-              composerImages.length > 0 && (
-                <ChatComposerImages />
-              )}
+              composerImages.length > 0 && <ChatComposerImages />}
             <ComposerPromptEditor
               ref={composerEditorRef}
               value={
@@ -93,8 +93,7 @@ export default function ChatInputBar() {
               onPaste={onComposerPaste}
               placeholder={
                 isComposerApprovalState
-                  ? (activePendingApproval?.detail ??
-                    "Resolve this approval request to continue")
+                  ? (activePendingApproval?.detail ?? "Resolve this approval request to continue")
                   : activePendingProgress
                     ? "Type your own answer, or leave this blank to use the selected option"
                     : showPlanFollowUpPrompt && activeProposedPlan
@@ -103,7 +102,8 @@ export default function ChatInputBar() {
                         ? "Ask for follow-up changes or attach images"
                         : "Ask anything, @tag files/folders, or use / to show available commands"
               }
-              disabled={isConnecting || isComposerApprovalState}
+              {/* TODO: isConnecting doesnt seem to be used. */}
+              disabled={/* isConnecting || */ isComposerApprovalState}
             />
           </div>
 
@@ -112,5 +112,5 @@ export default function ChatInputBar() {
         </div>
       </form>
     </div>
-  )
+  );
 }

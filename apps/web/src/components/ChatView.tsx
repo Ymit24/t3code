@@ -15,8 +15,6 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
-import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
-import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import NoActiveThread from "./chat/ChatNoActiveThread";
 import { ChatViewStoreProvider, useChatViewStore } from "./ChatViewStoreProvider";
 import ChatInputBar from "./chat/ChatInputBar";
@@ -28,9 +26,7 @@ import { useCallback, useRef } from "react";
 import useIsServerThread from "~/hooks/chat/useIsServer";
 import ChatBanners from "./chat/ChatBanners";
 import useIsGitRepo from "~/hooks/chat/useIsGitRepo";
-import useGitCwd from "~/hooks/chat/useGitCwd";
 import useActivePlan from "~/hooks/chat/useActivePlan";
-import { threadId } from "worker_threads";
 import { useTerminalStateStore, selectThreadTerminalState } from "~/terminalStateStore";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -106,7 +102,6 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
     setPullRequestDialogState(null);
   }, [setPullRequestDialogState]);
 
-  const gitCwd = useGitCwd(activeThread);
   const isGitRepo = useIsGitRepo(activeThread);
 
   const planSidebarOpen = useChatViewStore((state) => state.planSidebarOpen);
@@ -151,7 +146,7 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
           <ChatMessageTimelineArea activeThread={activeThread} />
 
           {/* Input bar */}
-          <ChatInputBar />
+          <ChatInputBar activeThread={activeThread} />
 
           {isGitRepo && (
             <BranchToolbar
