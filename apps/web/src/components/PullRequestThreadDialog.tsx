@@ -21,21 +21,23 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Spinner } from "./ui/spinner";
+import { Thread } from "~/types";
+import usePreparePullRequestThread from "~/hooks/chat/usePreparePullRequestThread";
 
 interface PullRequestThreadDialogProps {
+  activeThread: Thread;
   open: boolean;
   cwd: string | null;
   initialReference: string | null;
   onOpenChange: (open: boolean) => void;
-  onPrepared: (input: { branch: string; worktreePath: string | null }) => Promise<void> | void;
 }
 
 export function PullRequestThreadDialog({
+  activeThread,
   open,
   cwd,
   initialReference,
   onOpenChange,
-  onPrepared,
 }: PullRequestThreadDialogProps) {
   const queryClient = useQueryClient();
   const referenceInputRef = useRef<HTMLInputElement>(null);
@@ -47,6 +49,8 @@ export function PullRequestThreadDialog({
     { wait: 450 },
     (debouncerState) => ({ isPending: debouncerState.isPending }),
   );
+
+  const { handlePreparedPullRequestThread: onPrepared } = usePreparePullRequestThread(activeThread);
 
   useEffect(() => {
     if (!open) return;

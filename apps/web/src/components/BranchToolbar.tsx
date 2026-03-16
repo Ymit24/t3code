@@ -13,6 +13,9 @@ import {
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import useEnvMode from "~/hooks/chat/useEnvMode";
+import useScheduleComposerFocus from "~/hooks/chat/useScheduleComposerFocus";
+import { Thread } from "~/types";
 
 const envModeItems = [
   { value: "local", label: "Local" },
@@ -20,20 +23,15 @@ const envModeItems = [
 ] as const;
 
 interface BranchToolbarProps {
-  threadId: ThreadId;
-  onEnvModeChange: (mode: EnvMode) => void;
-  envLocked: boolean;
+  activeThread: Thread;
   onCheckoutPullRequestRequest?: (reference: string) => void;
-  onComposerFocusRequest?: () => void;
 }
 
 export default function BranchToolbar({
-  threadId,
-  onEnvModeChange,
-  envLocked,
+  activeThread,
   onCheckoutPullRequestRequest,
-  onComposerFocusRequest,
 }: BranchToolbarProps) {
+  const threadId = activeThread.id;
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
   const setThreadBranchAction = useStore((store) => store.setThreadBranch);
@@ -43,7 +41,6 @@ export default function BranchToolbar({
   const serverThread = threads.find((thread) => thread.id === threadId);
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = projects.find((project) => project.id === activeProjectId);
-  const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
   const activeThreadBranch = serverThread?.branch ?? draftThread?.branch ?? null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
   const branchCwd = activeWorktreePath ?? activeProject?.cwd ?? null;
@@ -54,9 +51,12 @@ export default function BranchToolbar({
     draftThreadEnvMode: draftThread?.envMode,
   });
 
+  const { envLocked, onEnvModeChange } = useEnvMode(activeThread);
+  const onComposerFocusRequest = useScheduleComposerFocus();
+
   const setThreadBranch = useCallback(
     (branch: string | null, worktreePath: string | null) => {
-      if (!activeThreadId) return;
+      if (!activeThread.id) return;
       const api = readNativeApi();
       // If the effective cwd is about to change, stop the running session so the
       // next message creates a new one with the correct cwd.
@@ -65,7 +65,7 @@ export default function BranchToolbar({
           .dispatchCommand({
             type: "thread.session.stop",
             commandId: newCommandId(),
-            threadId: activeThreadId,
+            threadId: activeThread.id,
             createdAt: new Date().toISOString(),
           })
           .catch(() => undefined);
@@ -74,13 +74,13 @@ export default function BranchToolbar({
         void api.orchestration.dispatchCommand({
           type: "thread.meta.update",
           commandId: newCommandId(),
-          threadId: activeThreadId,
+          threadId: activeThread.id,
           branch,
           worktreePath,
         });
       }
       if (hasServerThread) {
-        setThreadBranchAction(activeThreadId, branch, worktreePath);
+        setThreadBranchAction(activeThread.id, branch, worktreePath);
         return;
       }
       const nextDraftEnvMode = resolveDraftEnvModeAfterBranchChange({
@@ -88,25 +88,24 @@ export default function BranchToolbar({
         currentWorktreePath: activeWorktreePath,
         effectiveEnvMode,
       });
-      setDraftThreadContext(threadId, {
+      setDraftThreadContext(activeThread.id, {
         branch,
         worktreePath,
         envMode: nextDraftEnvMode,
       });
     },
     [
-      activeThreadId,
+      activeThread,
       serverThread?.session,
       activeWorktreePath,
       hasServerThread,
       setThreadBranchAction,
       setDraftThreadContext,
-      threadId,
       effectiveEnvMode,
     ],
   );
 
-  if (!activeThreadId || !activeProject) return null;
+  if (!activeThread.id || !activeProject) return null;
 
   return (
     <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-5 pb-3 pt-1">
@@ -163,8 +162,8 @@ export default function BranchToolbar({
         effectiveEnvMode={effectiveEnvMode}
         envLocked={envLocked}
         onSetThreadBranch={setThreadBranch}
+        onComposerFocusRequest={onComposerFocusRequest}
         {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
-        {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
       />
     </div>
   );

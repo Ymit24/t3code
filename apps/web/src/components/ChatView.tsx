@@ -25,6 +25,7 @@ import { useActiveProject } from "~/hooks/chat/useActiveProject";
 import useActiveThread from "~/hooks/chat/useActiveThread";
 import { useCallback } from "react";
 import useIsServerThread from "~/hooks/chat/useIsServer";
+import ChatBanners from "./chat/ChatBanners";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -79,31 +80,36 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
   const isServerThread = useIsServerThread(activeThread);
   const canCheckoutPullRequestIntoThread = !isServerThread && activeThread !== undefined;
 
-  const openPullRequestDialog = useCallback((reference: string) => {
-    if (!canCheckoutPullRequestIntoThread) {
-      return;
-    }
-    setPullRequestDialogState({
-      initialReference: reference ?? null,
-      key: Date.now(),
-    });
+  const openPullRequestDialog = useCallback(
+    (reference: string) => {
+      if (!canCheckoutPullRequestIntoThread) {
+        return;
+      }
+      setPullRequestDialogState({
+        initialReference: reference ?? null,
+        key: Date.now(),
+      });
 
-    // TODO: consider how this should work
-    // setComposerHighlightedItemId(null);
-  }, []);
+      // TODO: consider how this should work
+      // setComposerHighlightedItemId(null);
+    },
+    [canCheckoutPullRequestIntoThread, setPullRequestDialogState],
+  );
 
   const closePullRequestDialog = useCallback(() => {
     setPullRequestDialogState(null);
-  }, [])
+  }, [setPullRequestDialogState]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
       <ChatHeader activeThread={activeThread} />
+
       {/* TODO: this may go in like chat header or something */}
       {pullRequestDialogState ? (
         <PullRequestThreadDialog
           key={pullRequestDialogState.key}
+          activeThread={activeThread}
           open
           cwd={activeProject?.cwd ?? null}
           initialReference={pullRequestDialogState.initialReference}
@@ -112,16 +118,12 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
               closePullRequestDialog();
             }
           }}
-          onPrepared={handlePreparedPullRequestThread}
         />
       ) : null}
 
       {/* Error banner */}
-      <ProviderHealthBanner status={activeProviderStatus} />
-      <ThreadErrorBanner
-        error={activeThread.error}
-        onDismiss={() => setThreadError(activeThread.id, null)}
-      />
+      <ChatBanners activeThread={activeThread} />
+
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
@@ -134,10 +136,7 @@ function ChatViewContent({ activeThread }: { activeThread: Thread }) {
 
           {isGitRepo && (
             <BranchToolbar
-              threadId={activeThread.id}
-              onEnvModeChange={onEnvModeChange}
-              envLocked={envLocked}
-              onComposerFocusRequest={scheduleComposerFocus}
+              activeThread={activeThread}
               {...(canCheckoutPullRequestIntoThread
                 ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                 : {})}

@@ -7,6 +7,7 @@ import { ExpandedImagePreview } from "./components/chat/ExpandedImagePreview";
 export type ChatViewStoreState = {
   localDraftError: string | null;
   terminalFocusRequestId: number;
+
   sendPhase: SendPhase;
   sendStartedAt: string | null;
 
