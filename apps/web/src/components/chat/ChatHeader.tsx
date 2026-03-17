@@ -1,9 +1,6 @@
-import {
-  type EditorId,
-  type ProjectScript,
-  type ResolvedKeybindingsConfig,
-} from "@t3tools/contracts";
+import { type ProjectScript } from "@t3tools/contracts";
 import { memo } from "react";
+import { shortcutLabelForCommand } from "../../keybindings";
 import GitActionsControl from "../GitActionsControl";
 import { DiffIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
@@ -13,15 +10,13 @@ import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { useActiveProject } from "../../hooks/useActiveProject";
 import { useIsGitRepo } from "../../hooks/useIsGitRepo";
+import { useServerConfig } from "../../hooks/useServerConfig";
 import type { Thread } from "../../types";
 import { OpenInPicker } from "./OpenInPicker";
 
 interface ChatHeaderProps {
   activeThread: Thread;
   preferredScriptId: string | null;
-  keybindings: ResolvedKeybindingsConfig;
-  availableEditors: ReadonlyArray<EditorId>;
-  diffToggleShortcutLabel: string | null;
   diffOpen: boolean;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
@@ -33,9 +28,6 @@ interface ChatHeaderProps {
 export const ChatHeader = memo(function ChatHeader({
   activeThread,
   preferredScriptId,
-  keybindings,
-  availableEditors,
-  diffToggleShortcutLabel,
   diffOpen,
   onRunProjectScript,
   onAddProjectScript,
@@ -44,11 +36,13 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleDiff,
 }: ChatHeaderProps) {
   const activeProject = useActiveProject(activeThread);
+  const { availableEditors, keybindings } = useServerConfig();
   const activeProjectName = activeProject?.name;
   const activeProjectScripts = activeProject?.scripts;
   const openInCwd = activeThread.worktreePath ?? activeProject?.cwd ?? null;
   const gitCwd = activeThread.worktreePath ?? activeProject?.cwd ?? null;
   const isGitRepo = useIsGitRepo(activeThread);
+  const diffToggleShortcutLabel = shortcutLabelForCommand(keybindings, "diff.toggle");
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
