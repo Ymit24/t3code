@@ -1,19 +1,14 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
-  type EditorId,
-  type KeybindingCommand,
   type CodexReasoningEffort,
   type MessageId,
-  type ProjectId,
   type ProjectEntry,
   type ProjectScript,
   type ModelSlug,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-  type ResolvedKeybindingsConfig,
   type ProviderApprovalDecision,
-  type ServerProviderStatus,
   type ProviderKind,
   type ThreadId,
   type TurnId,
@@ -34,7 +29,6 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
-import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
@@ -77,16 +71,19 @@ import { truncateTitle } from "../truncateTitle";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
-  DEFAULT_THREAD_TERMINAL_ID,
-  MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
   type TurnDiffSummary,
 } from "../types";
 import { basenameOfPath } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
+import { useActiveProject } from "../hooks/useActiveProject";
+import { useProjectScripts } from "../hooks/useProjectScripts";
+import { useChatKeyboardShortcuts } from "../hooks/useChatKeyboardShortcuts";
+import { useServerConfig } from "../hooks/useServerConfig";
+import { useTerminalActions } from "../hooks/useTerminalActions";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -106,20 +103,14 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { toastManager } from "./ui/toast";
-import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
-import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
-  commandForProjectScript,
-  nextProjectScriptId,
   projectScriptRuntimeEnv,
-  projectScriptIdFromCommand,
   setupProjectScript,
 } from "~/projectScripts";
 import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { resolveAppModelSelection, useAppSettings } from "../appSettings";
-import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -128,7 +119,7 @@ import {
   useComposerThreadDraft,
 } from "../composerDraftStore";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
-import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { selectThreadChatViewState, useChatViewStateStore } from "../chatViewStateStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
@@ -150,29 +141,21 @@ import {
   cloneComposerImageForRetry,
   collectUserMessageBlobPreviewUrls,
   getCustomModelOptionsByProvider,
-  LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
-  LastInvokedScriptByProjectSchema,
   PullRequestDialogState,
   readFileAsDataUrl,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   SendPhase,
 } from "./ChatView.logic";
-import { useLocalStorage } from "~/hooks/useLocalStorage";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
-const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
-const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
-const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
-const SCRIPT_TERMINAL_COLS = 120;
-const SCRIPT_TERMINAL_ROWS = 30;
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -192,6 +175,42 @@ interface ChatViewProps {
 export default function ChatView({ threadId }: ChatViewProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
+  const draftThread = useComposerDraftStore(
+    (store) => store.draftThreadsByThreadId[threadId] ?? null,
+  );
+  const chatViewState = useChatViewStateStore((state) =>
+    selectThreadChatViewState(state.chatViewStateByThreadId, threadId),
+  );
+  const serverThread = threads.find((t) => t.id === threadId);
+  const fallbackDraftProject = projects.find((project) => project.id === draftThread?.projectId);
+  const localDraftError = serverThread ? null : chatViewState.localDraftError;
+  const localDraftThread = useMemo(
+    () =>
+      draftThread
+        ? buildLocalDraftThread(
+            threadId,
+            draftThread,
+            fallbackDraftProject?.model ?? DEFAULT_MODEL_BY_PROVIDER.codex,
+            localDraftError,
+          )
+        : undefined,
+    [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
+  );
+  const activeThread = serverThread ?? localDraftThread;
+
+  if (!activeThread) {
+    return <ChatViewEmptyState />;
+  }
+
+  return <ChatViewContent threadId={threadId} activeThread={activeThread} />;
+}
+
+interface ChatViewContentProps extends ChatViewProps {
+  activeThread: import("../types").Thread;
+}
+
+function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
+  const threads = useStore((store) => store.threads);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -248,9 +267,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
-  const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
-    Record<ThreadId, string | null>
-  >({});
   const [sendPhase, setSendPhase] = useState<SendPhase>("idle");
   const [sendStartedAt, setSendStartedAt] = useState<string | null>(null);
   const [isConnecting, _setIsConnecting] = useState(false);
@@ -273,7 +289,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   // Used by "Implement in new thread" to carry the sidebar-open intent across navigation.
   const planSidebarOpenOnNextThreadRef = useRef(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
@@ -285,11 +300,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(() =>
     detectComposerTrigger(prompt, prompt.length),
-  );
-  const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
-    LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
-    {},
-    LastInvokedScriptByProjectSchema,
   );
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [messagesScrollElement, setMessagesScrollElement] = useState<HTMLDivElement | null>(null);
@@ -322,15 +332,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setMessagesScrollElement(element);
   }, []);
 
-  const terminalState = useTerminalStateStore((state) =>
-    selectThreadTerminalState(state.terminalStateByThreadId, threadId),
-  );
-  const storeSetTerminalOpen = useTerminalStateStore((s) => s.setTerminalOpen);
-  const storeSetTerminalHeight = useTerminalStateStore((s) => s.setTerminalHeight);
-  const storeSplitTerminal = useTerminalStateStore((s) => s.splitTerminal);
-  const storeNewTerminal = useTerminalStateStore((s) => s.newTerminal);
-  const storeSetActiveTerminal = useTerminalStateStore((s) => s.setActiveTerminal);
-  const storeCloseTerminal = useTerminalStateStore((s) => s.closeTerminal);
+  const storeSetLocalDraftError = useChatViewStateStore((state) => state.setLocalDraftError);
 
   const setPrompt = useCallback(
     (nextPrompt: string) => {
@@ -358,33 +360,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
 
   const serverThread = threads.find((t) => t.id === threadId);
-  const fallbackDraftProject = projects.find((project) => project.id === draftThread?.projectId);
-  const localDraftError = serverThread ? null : (localDraftErrorsByThreadId[threadId] ?? null);
-  const localDraftThread = useMemo(
-    () =>
-      draftThread
-        ? buildLocalDraftThread(
-            threadId,
-            draftThread,
-            fallbackDraftProject?.model ?? DEFAULT_MODEL_BY_PROVIDER.codex,
-            localDraftError,
-          )
-        : undefined,
-    [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
-  );
-  const activeThread = serverThread ?? localDraftThread;
-  const runtimeMode =
-    composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const runtimeMode = composerDraft.runtimeMode ?? activeThread.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
-    composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+    composerDraft.interactionMode ?? activeThread.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
-  const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
+  const isLocalDraftThread = !isServerThread;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const diffOpen = rawSearch.diff === "1";
-  const activeThreadId = activeThread?.id ?? null;
-  const activeLatestTurn = activeThread?.latestTurn ?? null;
-  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
-  const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+  const activeThreadId = activeThread.id;
+  const activeLatestTurn = activeThread.latestTurn ?? null;
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread.session ?? null);
+  const activeProject = useActiveProject(activeThread);
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -913,7 +899,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const effectivePathQuery = pathTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const { keybindings, providerStatuses } = useServerConfig();
   const workspaceEntriesQuery = useQuery(
     projectSearchEntriesQueryOptions({
       cwd: gitCwd,
@@ -1001,9 +987,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => new Set(nonPersistedComposerImageIds),
     [nonPersistedComposerImageIds],
   );
-  const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
-  const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
   const activeProvider = activeThread?.session?.provider ?? "codex";
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === activeProvider) ?? null,
@@ -1034,10 +1017,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "terminal.close"),
     [keybindings],
   );
-  const diffPanelShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "diff.toggle"),
-    [keybindings],
-  );
   const onToggleDiff = useCallback(() => {
     void navigate({
       to: "/$threadId",
@@ -1055,16 +1034,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (activeThread.messages.length > 0 ||
       (activeThread.session !== null && activeThread.session.status !== "closed")),
   );
-  const activeTerminalGroup =
-    terminalState.terminalGroups.find(
-      (group) => group.id === terminalState.activeTerminalGroupId,
-    ) ??
-    terminalState.terminalGroups.find((group) =>
-      group.terminalIds.includes(terminalState.activeTerminalId),
-    ) ??
-    null;
-  const hasReachedSplitLimit =
-    (activeTerminalGroup?.terminalIds.length ?? 0) >= MAX_TERMINALS_PER_GROUP;
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
@@ -1072,17 +1041,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
         setStoreThreadError(targetThreadId, error);
         return;
       }
-      setLocalDraftErrorsByThreadId((existing) => {
-        if ((existing[targetThreadId] ?? null) === error) {
-          return existing;
-        }
-        return {
-          ...existing,
-          [targetThreadId]: error,
-        };
-      });
+      storeSetLocalDraftError(targetThreadId, error);
     },
-    [setStoreThreadError, threads],
+    [setStoreThreadError, storeSetLocalDraftError, threads],
   );
 
   const focusComposer = useCallback(() => {
@@ -1093,297 +1054,49 @@ export default function ChatView({ threadId }: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
-  const setTerminalOpen = useCallback(
-    (open: boolean) => {
-      if (!activeThreadId) return;
-      storeSetTerminalOpen(activeThreadId, open);
+  const {
+    activeThreadId: terminalThreadId,
+    activateTerminal,
+    closeTerminal,
+    createNewTerminal,
+    setTerminalFocusRequestId,
+    setTerminalHeight,
+    setTerminalOpen,
+    splitTerminal,
+    storeNewTerminal,
+    storeSetActiveTerminal,
+    terminalFocusRequestId,
+    terminalState,
+    toggleTerminalVisibility,
+  } = useTerminalActions({
+    activeThread,
+    activeProject,
+    setThreadError,
+    focusComposer,
+  });
+  const {
+    preferredScriptId,
+    runProjectScript,
+    saveProjectScript,
+    updateProjectScript,
+    deleteProjectScript,
+  } = useProjectScripts({
+    activeProject,
+    activeThread,
+    activeThreadId: terminalThreadId,
+    gitCwd,
+    isServerThread,
+    terminalState: {
+      activeTerminalId: terminalState.activeTerminalId,
+      runningTerminalIds: terminalState.runningTerminalIds,
+      terminalIds: terminalState.terminalIds,
     },
-    [activeThreadId, storeSetTerminalOpen],
-  );
-  const setTerminalHeight = useCallback(
-    (height: number) => {
-      if (!activeThreadId) return;
-      storeSetTerminalHeight(activeThreadId, height);
-    },
-    [activeThreadId, storeSetTerminalHeight],
-  );
-  const toggleTerminalVisibility = useCallback(() => {
-    if (!activeThreadId) return;
-    setTerminalOpen(!terminalState.terminalOpen);
-  }, [activeThreadId, setTerminalOpen, terminalState.terminalOpen]);
-  const splitTerminal = useCallback(() => {
-    if (!activeThreadId || hasReachedSplitLimit) return;
-    const terminalId = `terminal-${randomUUID()}`;
-    storeSplitTerminal(activeThreadId, terminalId);
-    setTerminalFocusRequestId((value) => value + 1);
-  }, [activeThreadId, hasReachedSplitLimit, storeSplitTerminal]);
-  const createNewTerminal = useCallback(() => {
-    if (!activeThreadId) return;
-    const terminalId = `terminal-${randomUUID()}`;
-    storeNewTerminal(activeThreadId, terminalId);
-    setTerminalFocusRequestId((value) => value + 1);
-  }, [activeThreadId, storeNewTerminal]);
-  const activateTerminal = useCallback(
-    (terminalId: string) => {
-      if (!activeThreadId) return;
-      storeSetActiveTerminal(activeThreadId, terminalId);
-      setTerminalFocusRequestId((value) => value + 1);
-    },
-    [activeThreadId, storeSetActiveTerminal],
-  );
-  const closeTerminal = useCallback(
-    (terminalId: string) => {
-      const api = readNativeApi();
-      if (!activeThreadId || !api) return;
-      const isFinalTerminal = terminalState.terminalIds.length <= 1;
-      const fallbackExitWrite = () =>
-        api.terminal
-          .write({ threadId: activeThreadId, terminalId, data: "exit\n" })
-          .catch(() => undefined);
-      if ("close" in api.terminal && typeof api.terminal.close === "function") {
-        void (async () => {
-          if (isFinalTerminal) {
-            await api.terminal
-              .clear({ threadId: activeThreadId, terminalId })
-              .catch(() => undefined);
-          }
-          await api.terminal.close({
-            threadId: activeThreadId,
-            terminalId,
-            deleteHistory: true,
-          });
-        })().catch(() => fallbackExitWrite());
-      } else {
-        void fallbackExitWrite();
-      }
-      storeCloseTerminal(activeThreadId, terminalId);
-      setTerminalFocusRequestId((value) => value + 1);
-    },
-    [activeThreadId, storeCloseTerminal, terminalState.terminalIds.length],
-  );
-  const runProjectScript = useCallback(
-    async (
-      script: ProjectScript,
-      options?: {
-        cwd?: string;
-        env?: Record<string, string>;
-        worktreePath?: string | null;
-        preferNewTerminal?: boolean;
-        rememberAsLastInvoked?: boolean;
-        allowLocalDraftThread?: boolean;
-      },
-    ) => {
-      const api = readNativeApi();
-      if (!api || !activeThreadId || !activeProject || !activeThread) return;
-      if (!isServerThread && !options?.allowLocalDraftThread) return;
-      if (options?.rememberAsLastInvoked !== false) {
-        setLastInvokedScriptByProjectId((current) => {
-          if (current[activeProject.id] === script.id) return current;
-          return { ...current, [activeProject.id]: script.id };
-        });
-      }
-      const targetCwd = options?.cwd ?? gitCwd ?? activeProject.cwd;
-      const baseTerminalId =
-        terminalState.activeTerminalId ||
-        terminalState.terminalIds[0] ||
-        DEFAULT_THREAD_TERMINAL_ID;
-      const isBaseTerminalBusy = terminalState.runningTerminalIds.includes(baseTerminalId);
-      const wantsNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
-      const shouldCreateNewTerminal = wantsNewTerminal;
-      const targetTerminalId = shouldCreateNewTerminal
-        ? `terminal-${randomUUID()}`
-        : baseTerminalId;
-
-      setTerminalOpen(true);
-      if (shouldCreateNewTerminal) {
-        storeNewTerminal(activeThreadId, targetTerminalId);
-      } else {
-        storeSetActiveTerminal(activeThreadId, targetTerminalId);
-      }
-      setTerminalFocusRequestId((value) => value + 1);
-
-      const runtimeEnv = projectScriptRuntimeEnv({
-        project: {
-          cwd: activeProject.cwd,
-        },
-        worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
-        ...(options?.env ? { extraEnv: options.env } : {}),
-      });
-      const openTerminalInput: Parameters<typeof api.terminal.open>[0] = shouldCreateNewTerminal
-        ? {
-            threadId: activeThreadId,
-            terminalId: targetTerminalId,
-            cwd: targetCwd,
-            env: runtimeEnv,
-            cols: SCRIPT_TERMINAL_COLS,
-            rows: SCRIPT_TERMINAL_ROWS,
-          }
-        : {
-            threadId: activeThreadId,
-            terminalId: targetTerminalId,
-            cwd: targetCwd,
-            env: runtimeEnv,
-          };
-
-      try {
-        await api.terminal.open(openTerminalInput);
-        await api.terminal.write({
-          threadId: activeThreadId,
-          terminalId: targetTerminalId,
-          data: `${script.command}\r`,
-        });
-      } catch (error) {
-        setThreadError(
-          activeThreadId,
-          error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
-        );
-      }
-    },
-    [
-      activeProject,
-      activeThread,
-      activeThreadId,
-      gitCwd,
-      isServerThread,
-      setTerminalOpen,
-      setThreadError,
-      storeNewTerminal,
-      storeSetActiveTerminal,
-      setLastInvokedScriptByProjectId,
-      terminalState.activeTerminalId,
-      terminalState.runningTerminalIds,
-      terminalState.terminalIds,
-    ],
-  );
-  const persistProjectScripts = useCallback(
-    async (input: {
-      projectId: ProjectId;
-      projectCwd: string;
-      previousScripts: ProjectScript[];
-      nextScripts: ProjectScript[];
-      keybinding?: string | null;
-      keybindingCommand: KeybindingCommand;
-    }) => {
-      const api = readNativeApi();
-      if (!api) return;
-
-      await api.orchestration.dispatchCommand({
-        type: "project.meta.update",
-        commandId: newCommandId(),
-        projectId: input.projectId,
-        scripts: input.nextScripts,
-      });
-
-      const keybindingRule = decodeProjectScriptKeybindingRule({
-        keybinding: input.keybinding,
-        command: input.keybindingCommand,
-      });
-
-      if (isElectron && keybindingRule) {
-        await api.server.upsertKeybinding(keybindingRule);
-        await queryClient.invalidateQueries({ queryKey: serverQueryKeys.all });
-      }
-    },
-    [queryClient],
-  );
-  const saveProjectScript = useCallback(
-    async (input: NewProjectScriptInput) => {
-      if (!activeProject) return;
-      const nextId = nextProjectScriptId(
-        input.name,
-        activeProject.scripts.map((script) => script.id),
-      );
-      const nextScript: ProjectScript = {
-        id: nextId,
-        name: input.name,
-        command: input.command,
-        icon: input.icon,
-        runOnWorktreeCreate: input.runOnWorktreeCreate,
-      };
-      const nextScripts = input.runOnWorktreeCreate
-        ? [
-            ...activeProject.scripts.map((script) =>
-              script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-            ),
-            nextScript,
-          ]
-        : [...activeProject.scripts, nextScript];
-
-      await persistProjectScripts({
-        projectId: activeProject.id,
-        projectCwd: activeProject.cwd,
-        previousScripts: activeProject.scripts,
-        nextScripts,
-        keybinding: input.keybinding,
-        keybindingCommand: commandForProjectScript(nextId),
-      });
-    },
-    [activeProject, persistProjectScripts],
-  );
-  const updateProjectScript = useCallback(
-    async (scriptId: string, input: NewProjectScriptInput) => {
-      if (!activeProject) return;
-      const existingScript = activeProject.scripts.find((script) => script.id === scriptId);
-      if (!existingScript) {
-        throw new Error("Script not found.");
-      }
-
-      const updatedScript: ProjectScript = {
-        ...existingScript,
-        name: input.name,
-        command: input.command,
-        icon: input.icon,
-        runOnWorktreeCreate: input.runOnWorktreeCreate,
-      };
-      const nextScripts = activeProject.scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
-      );
-
-      await persistProjectScripts({
-        projectId: activeProject.id,
-        projectCwd: activeProject.cwd,
-        previousScripts: activeProject.scripts,
-        nextScripts,
-        keybinding: input.keybinding,
-        keybindingCommand: commandForProjectScript(scriptId),
-      });
-    },
-    [activeProject, persistProjectScripts],
-  );
-  const deleteProjectScript = useCallback(
-    async (scriptId: string) => {
-      if (!activeProject) return;
-      const nextScripts = activeProject.scripts.filter((script) => script.id !== scriptId);
-
-      const deletedName = activeProject.scripts.find((s) => s.id === scriptId)?.name;
-
-      try {
-        await persistProjectScripts({
-          projectId: activeProject.id,
-          projectCwd: activeProject.cwd,
-          previousScripts: activeProject.scripts,
-          nextScripts,
-          keybinding: null,
-          keybindingCommand: commandForProjectScript(scriptId),
-        });
-        toastManager.add({
-          type: "success",
-          title: `Deleted action "${deletedName ?? "Unknown"}"`,
-        });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not delete action",
-          description: error instanceof Error ? error.message : "An unexpected error occurred.",
-        });
-      }
-    },
-    [activeProject, persistProjectScripts],
-  );
+    setTerminalOpen,
+    setTerminalFocusRequestId,
+    storeNewTerminal,
+    storeSetActiveTerminal,
+    setThreadError,
+  });
 
   const handleRuntimeModeChange = useCallback(
     (mode: RuntimeMode) => {
@@ -1962,87 +1675,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
 
     terminalOpenByThreadRef.current[activeThreadId] = current;
-  }, [activeThreadId, focusComposer, terminalState.terminalOpen]);
+  }, [activeThreadId, focusComposer, setTerminalFocusRequestId, terminalState.terminalOpen]);
 
-  useEffect(() => {
-    const handler = (event: globalThis.KeyboardEvent) => {
-      if (!activeThreadId || event.defaultPrevented) return;
-      const shortcutContext = {
-        terminalFocus: isTerminalFocused(),
-        terminalOpen: Boolean(terminalState.terminalOpen),
-      };
-
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: shortcutContext,
-      });
-      if (!command) return;
-
-      if (command === "terminal.toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleTerminalVisibility();
-        return;
-      }
-
-      if (command === "terminal.split") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminal();
-        return;
-      }
-
-      if (command === "terminal.close") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) return;
-        closeTerminal(terminalState.activeTerminalId);
-        return;
-      }
-
-      if (command === "terminal.new") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        createNewTerminal();
-        return;
-      }
-
-      if (command === "diff.toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        onToggleDiff();
-        return;
-      }
-
-      const scriptId = projectScriptIdFromCommand(command);
-      if (!scriptId || !activeProject) return;
-      const script = activeProject.scripts.find((entry) => entry.id === scriptId);
-      if (!script) return;
-      event.preventDefault();
-      event.stopPropagation();
-      void runProjectScript(script);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [
+  useChatKeyboardShortcuts({
+    keybindings,
     activeProject,
-    terminalState.terminalOpen,
-    terminalState.activeTerminalId,
-    activeThreadId,
-    closeTerminal,
+    terminalState,
+    toggleTerminalVisibility,
+    splitTerminal,
     createNewTerminal,
+    closeTerminal,
     setTerminalOpen,
     runProjectScript,
-    splitTerminal,
-    keybindings,
     onToggleDiff,
-    toggleTerminalVisibility,
-  ]);
+  });
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
@@ -3191,32 +2837,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     void onRevertToTurnCount(targetTurnCount);
   };
 
-  // Empty state: no active thread
-  if (!activeThread) {
-    return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-muted-foreground/40">
-        {!isElectron && (
-          <header className="border-b border-border px-3 py-2 md:hidden">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger className="size-7 shrink-0" />
-              <span className="text-sm font-medium text-foreground">Threads</span>
-            </div>
-          </header>
-        )}
-        {isElectron && (
-          <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
-          </div>
-        )}
-        <div className="flex flex-1 items-center justify-center">
-          <div className="text-center">
-            <p className="text-sm">Select a thread or create a new one to get started.</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
@@ -3227,19 +2847,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
         )}
       >
         <ChatHeader
-          activeThreadId={activeThread.id}
-          activeThreadTitle={activeThread.title}
-          activeProjectName={activeProject?.name}
-          isGitRepo={isGitRepo}
-          openInCwd={activeThread.worktreePath ?? activeProject?.cwd ?? null}
-          activeProjectScripts={activeProject?.scripts}
-          preferredScriptId={
-            activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
-          }
-          keybindings={keybindings}
-          availableEditors={availableEditors}
-          diffToggleShortcutLabel={diffPanelShortcutLabel}
-          gitCwd={gitCwd}
+          activeThread={activeThread}
+          preferredScriptId={preferredScriptId}
           diffOpen={diffOpen}
           onRunProjectScript={(script) => {
             void runProjectScript(script);
@@ -3944,6 +3553,31 @@ export default function ChatView({ threadId }: ChatViewProps) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ChatViewEmptyState() {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-muted-foreground/40">
+      {!isElectron && (
+        <header className="border-b border-border px-3 py-2 md:hidden">
+          <div className="flex items-center gap-2">
+            <SidebarTrigger className="size-7 shrink-0" />
+            <span className="text-sm font-medium text-foreground">Threads</span>
+          </div>
+        </header>
+      )}
+      {isElectron && (
+        <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
+          <span className="text-xs text-muted-foreground/50">No active thread</span>
+        </div>
+      )}
+      <div className="flex flex-1 items-center justify-center">
+        <div className="text-center">
+          <p className="text-sm">Select a thread or create a new one to get started.</p>
+        </div>
+      </div>
     </div>
   );
 }

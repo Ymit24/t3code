@@ -16,6 +16,7 @@ import { AnchoredToastProvider, ToastProvider, toastManager } from "../component
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import { useChatViewStateStore } from "../chatViewStateStore";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -136,6 +137,9 @@ function EventRouter() {
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
+  const removeOrphanedChatViewThreadStates = useChatViewStateStore(
+    (store) => store.removeOrphanedThreadStates,
+  );
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -167,6 +171,7 @@ function EventRouter() {
         draftThreadIds,
       });
       removeOrphanedTerminalStates(activeThreadIds);
+      removeOrphanedChatViewThreadStates(activeThreadIds);
       if (pending) {
         pending = false;
         await flushSnapshotSync();
@@ -313,6 +318,7 @@ function EventRouter() {
   }, [
     navigate,
     queryClient,
+    removeOrphanedChatViewThreadStates,
     removeOrphanedTerminalStates,
     setProjectExpanded,
     syncServerReadModel,

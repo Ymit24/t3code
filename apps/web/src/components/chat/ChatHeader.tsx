@@ -1,10 +1,6 @@
-import {
-  type EditorId,
-  type ProjectScript,
-  type ResolvedKeybindingsConfig,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { type ProjectScript } from "@t3tools/contracts";
 import { memo } from "react";
+import { shortcutLabelForCommand } from "../../keybindings";
 import GitActionsControl from "../GitActionsControl";
 import { DiffIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
@@ -12,20 +8,15 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
+import { useActiveProject } from "../../hooks/useActiveProject";
+import { useIsGitRepo } from "../../hooks/useIsGitRepo";
+import { useServerConfig } from "../../hooks/useServerConfig";
+import type { Thread } from "../../types";
 import { OpenInPicker } from "./OpenInPicker";
 
 interface ChatHeaderProps {
-  activeThreadId: ThreadId;
-  activeThreadTitle: string;
-  activeProjectName: string | undefined;
-  isGitRepo: boolean;
-  openInCwd: string | null;
-  activeProjectScripts: ProjectScript[] | undefined;
+  activeThread: Thread;
   preferredScriptId: string | null;
-  keybindings: ResolvedKeybindingsConfig;
-  availableEditors: ReadonlyArray<EditorId>;
-  diffToggleShortcutLabel: string | null;
-  gitCwd: string | null;
   diffOpen: boolean;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
@@ -35,17 +26,8 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader = memo(function ChatHeader({
-  activeThreadId,
-  activeThreadTitle,
-  activeProjectName,
-  isGitRepo,
-  openInCwd,
-  activeProjectScripts,
+  activeThread,
   preferredScriptId,
-  keybindings,
-  availableEditors,
-  diffToggleShortcutLabel,
-  gitCwd,
   diffOpen,
   onRunProjectScript,
   onAddProjectScript,
@@ -53,15 +35,24 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
   onToggleDiff,
 }: ChatHeaderProps) {
+  const activeProject = useActiveProject(activeThread);
+  const { availableEditors, keybindings } = useServerConfig();
+  const activeProjectName = activeProject?.name;
+  const activeProjectScripts = activeProject?.scripts;
+  const openInCwd = activeThread.worktreePath ?? activeProject?.cwd ?? null;
+  const gitCwd = activeThread.worktreePath ?? activeProject?.cwd ?? null;
+  const isGitRepo = useIsGitRepo(activeThread);
+  const diffToggleShortcutLabel = shortcutLabelForCommand(keybindings, "diff.toggle");
+
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
         <SidebarTrigger className="size-7 shrink-0 md:hidden" />
         <h2
           className="min-w-0 shrink truncate text-sm font-medium text-foreground"
-          title={activeThreadTitle}
+          title={activeThread.title}
         >
-          {activeThreadTitle}
+          {activeThread.title}
         </h2>
         {activeProjectName && (
           <Badge variant="outline" className="min-w-0 shrink truncate">
@@ -93,7 +84,9 @@ export const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
-        {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
+        {activeProjectName && (
+          <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThread.id} />
+        )}
         <Tooltip>
           <TooltipTrigger
             render={
