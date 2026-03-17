@@ -15,6 +15,14 @@ import {
 } from "@t3tools/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import {
+  getDefaultModel,
+  getDefaultReasoningEffort,
+  getReasoningEffortOptions,
+  normalizeModelSlug,
+  resolveModelSlugForProvider,
+} from "@t3tools/shared/model";
 import {
   BotIcon,
   ChevronDownIcon,
@@ -38,6 +46,7 @@ import {
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { cn, randomUUID } from "~/lib/utils";
 import {
+  clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
@@ -51,16 +60,37 @@ import {
   setPendingUserInputCustomAnswer,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
-import { proposedPlanTitle, resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import {
+  buildPlanImplementationPrompt,
+  buildPlanImplementationThreadTitle,
+  proposedPlanTitle,
+  resolvePlanFollowUpSubmission,
+} from "../../proposedPlan";
+import {
+  deriveActivePlanState,
+  derivePendingApprovals,
+  derivePendingUserInputs,
+  findLatestProposedPlan,
+  isLatestTurnSettled,
   type ActivePlanState,
   type LatestProposedPlanState,
-  type PendingApproval,
-  type PendingUserInput,
 } from "../../session-logic";
-import { type ChatMessage, type Project, type SessionPhase, type Thread } from "../../types";
+import {
+  DEFAULT_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  type ChatMessage,
+  type Project,
+  type SessionPhase,
+  type Thread,
+} from "../../types";
 import { basenameOfPath } from "../../vscode-icons";
-import { type ComposerImageAttachment, type DraftThreadEnvMode } from "../../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type DraftThreadEnvMode,
+  type PersistedComposerImageAttachment,
+  useComposerDraftStore,
+  useComposerThreadDraft,
+} from "../../composerDraftStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -74,19 +104,23 @@ import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import { ProviderModelPicker } from "./ProviderModelPicker";
-import { newCommandId, newMessageId } from "~/lib/utils";
+import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./ProviderModelPicker";
+import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { setupProjectScript } from "~/projectScripts";
+import { resolveAppModelSelection, useAppSettings } from "../../appSettings";
 import {
   buildTemporaryWorktreeBranchName,
   cloneComposerImageForRetry,
+  getCustomModelOptionsByProvider,
   readFileAsDataUrl,
   revokeUserMessagePreviewUrls,
   type SendPhase,
 } from "../ChatView.logic";
 import { truncateTitle } from "../../truncateTitle";
 import { toastManager } from "../ui/toast";
+import { useTheme } from "../../hooks/useTheme";
+import { useStore } from "../../store";
 
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -117,18 +151,11 @@ interface ComposerSearchableModelOption {
 }
 
 export interface ThreadComposerProps {
-  activePlan: ActivePlanState | null;
-  activePendingApproval: PendingApproval | null;
   activeProject: Project | null;
-  activeProposedPlan: LatestProposedPlanState | null;
   activeThread: Thread;
   assistantStreamingEnabled: boolean;
-  composerCursor: number;
   composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
   composerFormRef: RefObject<HTMLFormElement | null>;
-  composerHighlightedItemId: string | null;
-  composerImages: ComposerImageAttachment[];
-  composerTrigger: ComposerTrigger | null;
   gitCwd: string | null;
   isComposerFooterCompact: boolean;
   isConnecting: boolean;
@@ -136,14 +163,7 @@ export interface ThreadComposerProps {
   isServerThread: boolean;
   isPreparingWorktree: boolean;
   isSendBusy: boolean;
-  interactionMode: ProviderInteractionMode;
-  lockedProvider: ProviderKind | null;
-  modelOptionsByProvider: ComponentProps<typeof ProviderModelPicker>["modelOptionsByProvider"];
-  nonPersistedComposerImageIdSet: ReadonlySet<string>;
-  addComposerImage: (image: ComposerImageAttachment) => void;
-  addComposerImagesToDraft: (images: ComposerImageAttachment[]) => void;
   beginSendPhase: (nextPhase: Exclude<SendPhase, "idle">) => void;
-  clearComposerDraftContent: (threadId: ThreadId) => void;
   createWorktree: (input: {
     cwd: string;
     branch: string;
@@ -152,23 +172,8 @@ export interface ThreadComposerProps {
   envMode: DraftThreadEnvMode;
   focusComposer: () => void;
   forceStickToBottom: () => void;
-  onCodexFastModeChange: (enabled: boolean) => void;
-  onHandleInteractionModeChange: (mode: ProviderInteractionMode) => void;
-  onEffortSelect: (effort: CodexReasoningEffort) => void;
-  onImplementPlanInNewThread: () => Promise<void>;
-  onInterrupt: () => Promise<void>;
   onOpenPlanSidebarForExecution: () => void;
-  onProviderModelSelect: ComponentProps<typeof ProviderModelPicker>["onProviderModelChange"];
-  onRespondToApproval: (
-    requestId: ApprovalRequestId,
-    decision: ProviderApprovalDecision,
-  ) => Promise<void>;
-  onRespondToUserInput: (
-    requestId: ApprovalRequestId,
-    answers: Record<string, unknown>,
-  ) => Promise<void>;
-  pendingApprovalsCount: number;
-  pendingUserInputs: PendingUserInput[];
+  onOpenPlanSidebarForNextThread: () => void;
   persistThreadSettingsForNextTurn: (input: {
     threadId: ThreadId;
     createdAt: string;
@@ -178,22 +183,7 @@ export interface ThreadComposerProps {
   }) => Promise<void>;
   phase: SessionPhase;
   planSidebarOpen: boolean;
-  providerOptionsForDispatch:
-    | {
-        codex?: {
-          binaryPath?: string;
-          homePath?: string;
-        };
-      }
-    | undefined;
-  prompt: string;
-  promptRef: RefObject<string>;
-  reasoningOptions: ComponentProps<typeof CodexTraitsPicker>["options"];
-  resolvedTheme: "light" | "dark";
-  respondingRequestIds: ApprovalRequestId[];
-  removeComposerImageFromDraft: (imageId: string) => void;
   resetSendPhase: () => void;
-  runtimeMode: RuntimeMode;
   runProjectScript: (
     script: ProjectScript,
     options?: {
@@ -203,53 +193,24 @@ export interface ThreadComposerProps {
       allowLocalDraftThread?: boolean;
     },
   ) => Promise<void>;
-  searchableModelOptions: ComposerSearchableModelOption[];
-  selectedCodexFastModeEnabled: boolean;
-  selectedEffort: CodexReasoningEffort | null;
-  selectedModel: ModelSlug;
-  selectedModelOptionsForDispatch:
-    | {
-        codex?: {
-          reasoningEffort?: CodexReasoningEffort;
-          fastMode?: true;
-        };
-      }
-    | undefined;
-  selectedModelForPickerWithCustomFallback: ComponentProps<typeof ProviderModelPicker>["model"];
-  selectedProvider: ProviderKind;
   sendInFlightRef: RefObject<boolean>;
   setExpandedImage: Dispatch<SetStateAction<ExpandedImagePreview | null>>;
-  setComposerCursor: Dispatch<SetStateAction<number>>;
-  setComposerDraftInteractionMode: (threadId: ThreadId, mode: ProviderInteractionMode) => void;
-  setComposerHighlightedItemId: Dispatch<SetStateAction<string | null>>;
-  setComposerTrigger: Dispatch<SetStateAction<ComposerTrigger | null>>;
   setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
-  setPrompt: (nextPrompt: string) => void;
   setStoreThreadBranch: (
     threadId: ThreadId,
     branch: string | null,
     worktreePath: string | null,
   ) => void;
   setThreadError: (targetThreadId: ThreadId | null, error: string | null) => void;
-  showPlanFollowUpPrompt: boolean;
-  toggleInteractionMode: () => void;
   togglePlanSidebar: () => void;
-  toggleRuntimeMode: () => void;
 }
 
 export default function ThreadComposer({
-  activePlan,
-  activePendingApproval,
   activeProject,
-  activeProposedPlan,
   activeThread,
   assistantStreamingEnabled,
-  composerCursor,
   composerEditorRef,
   composerFormRef,
-  composerHighlightedItemId,
-  composerImages,
-  composerTrigger,
   gitCwd,
   isComposerFooterCompact,
   isConnecting,
@@ -257,66 +218,48 @@ export default function ThreadComposer({
   isServerThread,
   isPreparingWorktree,
   isSendBusy,
-  interactionMode,
-  lockedProvider,
-  modelOptionsByProvider,
-  nonPersistedComposerImageIdSet,
-  addComposerImage,
-  addComposerImagesToDraft,
   beginSendPhase,
-  clearComposerDraftContent,
   createWorktree,
   envMode,
   focusComposer,
   forceStickToBottom,
-  onCodexFastModeChange,
-  onHandleInteractionModeChange,
-  onEffortSelect,
-  onImplementPlanInNewThread,
-  onInterrupt,
   onOpenPlanSidebarForExecution,
-  onProviderModelSelect,
-  onRespondToApproval,
-  onRespondToUserInput,
-  pendingApprovalsCount,
-  pendingUserInputs,
+  onOpenPlanSidebarForNextThread,
   persistThreadSettingsForNextTurn,
   phase,
   planSidebarOpen,
-  providerOptionsForDispatch,
-  prompt,
-  promptRef,
-  reasoningOptions,
-  resolvedTheme,
-  respondingRequestIds,
-  removeComposerImageFromDraft,
   resetSendPhase,
-  runtimeMode,
   runProjectScript,
-  searchableModelOptions,
-  selectedCodexFastModeEnabled,
-  selectedEffort,
-  selectedModel,
-  selectedModelOptionsForDispatch,
-  selectedModelForPickerWithCustomFallback,
-  selectedProvider,
   sendInFlightRef,
   setExpandedImage,
-  setComposerCursor,
-  setComposerDraftInteractionMode,
-  setComposerHighlightedItemId,
-  setComposerTrigger,
   setOptimisticUserMessages,
-  setPrompt,
   setStoreThreadBranch,
   setThreadError,
-  showPlanFollowUpPrompt,
-  toggleInteractionMode,
   togglePlanSidebar,
-  toggleRuntimeMode,
 }: ThreadComposerProps) {
+  const navigate = useNavigate();
+  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const { resolvedTheme } = useTheme();
+  const composerDraft = useComposerThreadDraft(activeThread.id);
+  const prompt = composerDraft.prompt;
+  const composerImages = composerDraft.images;
+  const nonPersistedComposerImageIdSet = useMemo(
+    () => new Set(composerDraft.nonPersistedImageIds),
+    [composerDraft.nonPersistedImageIds],
+  );
+  const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
+  const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
+  const [composerCursor, setComposerCursor] = useState(() =>
+    collapseExpandedComposerCursor(prompt, prompt.length),
+  );
+  const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(() =>
+    detectComposerTrigger(prompt, prompt.length),
+  );
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
+    ApprovalRequestId[]
+  >([]);
+  const [respondingApprovalRequestIds, setRespondingApprovalRequestIds] = useState<
     ApprovalRequestId[]
   >([]);
   const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
@@ -334,6 +277,174 @@ export default function ThreadComposer({
   const composerMenuOpenRef = useRef(false);
   const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
+  const { settings } = useAppSettings();
+  const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
+  const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
+  const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
+  const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const clearComposerDraftPersistedAttachments = useComposerDraftStore(
+    (store) => store.clearPersistedAttachments,
+  );
+  const syncComposerDraftPersistedAttachments = useComposerDraftStore(
+    (store) => store.syncPersistedAttachments,
+  );
+  const setComposerDraftProvider = useComposerDraftStore((store) => store.setProvider);
+  const setComposerDraftModel = useComposerDraftStore((store) => store.setModel);
+  const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
+  const setComposerDraftInteractionMode = useComposerDraftStore(
+    (store) => store.setInteractionMode,
+  );
+  const setComposerDraftEffort = useComposerDraftStore((store) => store.setEffort);
+  const setComposerDraftCodexFastMode = useComposerDraftStore((store) => store.setCodexFastMode);
+  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const runtimeMode = composerDraft.runtimeMode ?? activeThread.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const interactionMode =
+    composerDraft.interactionMode ?? activeThread.interactionMode ?? DEFAULT_INTERACTION_MODE;
+  const activeLatestTurn = activeThread.latestTurn ?? null;
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread.session ?? null);
+  const threadActivities = activeThread.activities;
+  const pendingApprovals = useMemo(
+    () => derivePendingApprovals(threadActivities ?? []),
+    [threadActivities],
+  );
+  const pendingUserInputs = useMemo(
+    () => derivePendingUserInputs(threadActivities ?? []),
+    [threadActivities],
+  );
+  const activePendingApproval = pendingApprovals[0] ?? null;
+  const activeProposedPlan = useMemo<LatestProposedPlanState | null>(() => {
+    if (!latestTurnSettled) {
+      return null;
+    }
+    return findLatestProposedPlan(
+      activeThread.proposedPlans ?? [],
+      activeLatestTurn?.turnId ?? null,
+    );
+  }, [activeLatestTurn?.turnId, activeThread.proposedPlans, latestTurnSettled]);
+  const activePlan = useMemo<ActivePlanState | null>(
+    () => deriveActivePlanState(threadActivities ?? [], activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, threadActivities],
+  );
+  const showPlanFollowUpPrompt =
+    pendingUserInputs.length === 0 &&
+    interactionMode === "plan" &&
+    latestTurnSettled &&
+    activeProposedPlan !== null;
+  const sessionProvider = activeThread.session?.provider ?? null;
+  const selectedProviderByThreadId = composerDraft.provider;
+  const hasThreadStarted =
+    activeThread.latestTurn !== null ||
+    activeThread.messages.length > 0 ||
+    activeThread.session !== null;
+  const lockedProvider: ProviderKind | null = hasThreadStarted
+    ? (sessionProvider ?? selectedProviderByThreadId ?? null)
+    : null;
+  const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
+  const baseThreadModel = resolveModelSlugForProvider(
+    selectedProvider,
+    activeThread.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
+  );
+  const customModelsForSelectedProvider = settings.customCodexModels;
+  const selectedModel = useMemo(() => {
+    const draftModel = composerDraft.model;
+    if (!draftModel) {
+      return baseThreadModel;
+    }
+    return resolveAppModelSelection(
+      selectedProvider,
+      customModelsForSelectedProvider,
+      draftModel,
+    ) as ModelSlug;
+  }, [baseThreadModel, composerDraft.model, customModelsForSelectedProvider, selectedProvider]);
+  const reasoningOptions = getReasoningEffortOptions(selectedProvider);
+  const supportsReasoningEffort = reasoningOptions.length > 0;
+  const selectedEffort = composerDraft.effort ?? getDefaultReasoningEffort(selectedProvider);
+  const selectedCodexFastModeEnabled =
+    selectedProvider === "codex" ? composerDraft.codexFastMode : false;
+  const selectedModelOptionsForDispatch = useMemo<
+    | {
+        codex?: {
+          reasoningEffort?: CodexReasoningEffort;
+          fastMode?: true;
+        };
+      }
+    | undefined
+  >(() => {
+    if (selectedProvider !== "codex") {
+      return undefined;
+    }
+    const codexOptions: {
+      reasoningEffort?: CodexReasoningEffort;
+      fastMode?: true;
+    } = {
+      ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
+      ...(selectedCodexFastModeEnabled ? { fastMode: true as const } : {}),
+    };
+    return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
+  }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
+  const providerOptionsForDispatch = useMemo(() => {
+    if (!settings.codexBinaryPath && !settings.codexHomePath) {
+      return undefined;
+    }
+    return {
+      codex: {
+        ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
+        ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
+      },
+    };
+  }, [settings.codexBinaryPath, settings.codexHomePath]);
+  const modelOptionsByProvider = useMemo(
+    () => getCustomModelOptionsByProvider(settings),
+    [settings],
+  );
+  const selectedModelForPickerWithCustomFallback = useMemo(() => {
+    const currentOptions = modelOptionsByProvider[selectedProvider];
+    return currentOptions.some((option) => option.slug === selectedModel)
+      ? selectedModel
+      : (normalizeModelSlug(selectedModel, selectedProvider) ?? selectedModel);
+  }, [modelOptionsByProvider, selectedModel, selectedProvider]);
+  const searchableModelOptions = useMemo<ComposerSearchableModelOption[]>(
+    () =>
+      AVAILABLE_PROVIDER_OPTIONS.filter(
+        (option) => lockedProvider === null || option.value === lockedProvider,
+      ).flatMap((option) =>
+        modelOptionsByProvider[option.value].map(({ slug, name }) => ({
+          provider: option.value,
+          providerLabel: option.label,
+          slug,
+          name,
+          searchSlug: slug.toLowerCase(),
+          searchName: name.toLowerCase(),
+          searchProvider: option.label.toLowerCase(),
+        })),
+      ),
+    [lockedProvider, modelOptionsByProvider],
+  );
+  const setPrompt = useCallback(
+    (nextPrompt: string) => {
+      setComposerDraftPrompt(activeThread.id, nextPrompt);
+    },
+    [activeThread.id, setComposerDraftPrompt],
+  );
+  const addComposerImage = useCallback(
+    (image: ComposerImageAttachment) => {
+      addComposerDraftImage(activeThread.id, image);
+    },
+    [activeThread.id, addComposerDraftImage],
+  );
+  const addComposerImagesToDraft = useCallback(
+    (images: ComposerImageAttachment[]) => {
+      addComposerDraftImages(activeThread.id, images);
+    },
+    [activeThread.id, addComposerDraftImages],
+  );
+  const removeComposerImageFromDraft = useCallback(
+    (imageId: string) => {
+      removeComposerDraftImage(activeThread.id, imageId);
+    },
+    [activeThread.id, removeComposerDraftImage],
+  );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
     () =>
@@ -495,6 +606,85 @@ export default function ThreadComposer({
   }, [composerImages]);
 
   useEffect(() => {
+    promptRef.current = prompt;
+    setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
+  }, [prompt]);
+
+  useEffect(() => {
+    setComposerHighlightedItemId(null);
+    setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
+    setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
+  }, [activeThread.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (composerImages.length === 0) {
+        clearComposerDraftPersistedAttachments(activeThread.id);
+        return;
+      }
+      const getPersistedAttachmentsForThread = () =>
+        useComposerDraftStore.getState().draftsByThreadId[activeThread.id]?.persistedAttachments ??
+        [];
+      try {
+        const currentPersistedAttachments = getPersistedAttachmentsForThread();
+        const existingPersistedById = new Map(
+          currentPersistedAttachments.map((attachment) => [attachment.id, attachment]),
+        );
+        const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
+        await Promise.all(
+          composerImages.map(async (image) => {
+            try {
+              const dataUrl = await readFileAsDataUrl(image.file);
+              stagedAttachmentById.set(image.id, {
+                id: image.id,
+                name: image.name,
+                mimeType: image.mimeType,
+                sizeBytes: image.sizeBytes,
+                dataUrl,
+              });
+            } catch {
+              const existingPersisted = existingPersistedById.get(image.id);
+              if (existingPersisted) {
+                stagedAttachmentById.set(image.id, existingPersisted);
+              }
+            }
+          }),
+        );
+        if (cancelled) {
+          return;
+        }
+        syncComposerDraftPersistedAttachments(
+          activeThread.id,
+          Array.from(stagedAttachmentById.values()),
+        );
+      } catch {
+        const currentImageIds = new Set(composerImages.map((image) => image.id));
+        const fallbackPersistedAttachments = getPersistedAttachmentsForThread();
+        const fallbackPersistedIds = fallbackPersistedAttachments
+          .map((attachment) => attachment.id)
+          .filter((id) => currentImageIds.has(id));
+        const fallbackPersistedIdSet = new Set(fallbackPersistedIds);
+        const fallbackAttachments = fallbackPersistedAttachments.filter((attachment) =>
+          fallbackPersistedIdSet.has(attachment.id),
+        );
+        if (cancelled) {
+          return;
+        }
+        syncComposerDraftPersistedAttachments(activeThread.id, fallbackAttachments);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeThread.id,
+    clearComposerDraftPersistedAttachments,
+    composerImages,
+    syncComposerDraftPersistedAttachments,
+  ]);
+
+  useEffect(() => {
     const nextCustomAnswer = activePendingProgress?.customAnswer;
     if (typeof nextCustomAnswer !== "string") {
       lastSyncedPendingInputRef.current = null;
@@ -614,7 +804,24 @@ export default function ThreadComposer({
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
       try {
-        await onRespondToUserInput(requestId, activePendingResolvedAnswers);
+        const api = readNativeApi();
+        if (api) {
+          await api.orchestration
+            .dispatchCommand({
+              type: "thread.user-input.respond",
+              commandId: newCommandId(),
+              threadId: activeThread.id,
+              requestId,
+              answers: activePendingResolvedAnswers,
+              createdAt: new Date().toISOString(),
+            })
+            .catch((err: unknown) => {
+              setThreadError(
+                activeThread.id,
+                err instanceof Error ? err.message : "Failed to submit user input.",
+              );
+            });
+        }
       } finally {
         setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
       }
@@ -625,7 +832,8 @@ export default function ThreadComposer({
     activePendingProgress,
     activePendingResolvedAnswers,
     activePendingUserInput,
-    onRespondToUserInput,
+    activeThread.id,
+    setThreadError,
     setActivePendingUserInputQuestionIndex,
   ]);
 
@@ -636,7 +844,258 @@ export default function ThreadComposer({
     setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
   }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
 
+  const onRespondToApproval = useCallback(
+    async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
+      const api = readNativeApi();
+      if (!api) return;
+      await api.orchestration
+        .dispatchCommand({
+          type: "thread.approval.respond",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          requestId,
+          decision,
+          createdAt: new Date().toISOString(),
+        })
+        .catch((err: unknown) => {
+          setThreadError(
+            activeThread.id,
+            err instanceof Error ? err.message : "Failed to submit approval decision.",
+          );
+        });
+    },
+    [activeThread.id, setThreadError],
+  );
+
+  const onInterrupt = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.turn.interrupt",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+      createdAt: new Date().toISOString(),
+    });
+  }, [activeThread.id]);
+
+  const onImplementPlanInNewThread = useCallback(async () => {
+    const api = readNativeApi();
+    if (
+      !api ||
+      !activeProject ||
+      !activeProposedPlan ||
+      !isServerThread ||
+      isSendBusy ||
+      isConnecting ||
+      sendInFlightRef.current
+    ) {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const nextThreadId = newThreadId();
+    const planMarkdown = activeProposedPlan.planMarkdown;
+    const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
+    const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
+    const nextThreadModel: ModelSlug =
+      selectedModel ||
+      (activeThread.model as ModelSlug) ||
+      (activeProject.model as ModelSlug) ||
+      DEFAULT_MODEL_BY_PROVIDER.codex;
+
+    sendInFlightRef.current = true;
+    beginSendPhase("sending-turn");
+    const finish = () => {
+      sendInFlightRef.current = false;
+      resetSendPhase();
+    };
+
+    await api.orchestration
+      .dispatchCommand({
+        type: "thread.create",
+        commandId: newCommandId(),
+        threadId: nextThreadId,
+        projectId: activeProject.id,
+        title: nextThreadTitle,
+        model: nextThreadModel,
+        runtimeMode,
+        interactionMode: "default",
+        branch: activeThread.branch,
+        worktreePath: activeThread.worktreePath,
+        createdAt,
+      })
+      .then(() =>
+        api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: nextThreadId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: implementationPrompt,
+            attachments: [],
+          },
+          provider: selectedProvider,
+          model: selectedModel || undefined,
+          ...(selectedModelOptionsForDispatch
+            ? { modelOptions: selectedModelOptionsForDispatch }
+            : {}),
+          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          assistantDeliveryMode: assistantStreamingEnabled ? "streaming" : "buffered",
+          runtimeMode,
+          interactionMode: "default",
+          createdAt,
+        }),
+      )
+      .then(() => api.orchestration.getSnapshot())
+      .then((snapshot) => {
+        syncServerReadModel(snapshot);
+        onOpenPlanSidebarForNextThread();
+        return navigate({
+          to: "/$threadId",
+          params: { threadId: nextThreadId },
+        });
+      })
+      .catch(async (err) => {
+        await api.orchestration
+          .dispatchCommand({
+            type: "thread.delete",
+            commandId: newCommandId(),
+            threadId: nextThreadId,
+          })
+          .catch(() => undefined);
+        await api.orchestration
+          .getSnapshot()
+          .then((snapshot) => {
+            syncServerReadModel(snapshot);
+          })
+          .catch(() => undefined);
+        toastManager.add({
+          type: "error",
+          title: "Could not start implementation thread",
+          description:
+            err instanceof Error ? err.message : "An error occurred while creating the new thread.",
+        });
+      })
+      .then(finish, finish);
+  }, [
+    activeProject,
+    activeProposedPlan,
+    activeThread,
+    assistantStreamingEnabled,
+    beginSendPhase,
+    isConnecting,
+    isSendBusy,
+    isServerThread,
+    navigate,
+    onOpenPlanSidebarForNextThread,
+    providerOptionsForDispatch,
+    resetSendPhase,
+    runtimeMode,
+    selectedModel,
+    selectedModelOptionsForDispatch,
+    selectedProvider,
+    sendInFlightRef,
+    syncServerReadModel,
+  ]);
+
+  const handleRespondToApproval = useCallback(
+    async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
+      setRespondingApprovalRequestIds((existing) =>
+        existing.includes(requestId) ? existing : [...existing, requestId],
+      );
+      try {
+        await onRespondToApproval(requestId, decision);
+      } finally {
+        setRespondingApprovalRequestIds((existing) => existing.filter((id) => id !== requestId));
+      }
+    },
+    [onRespondToApproval],
+  );
+
   const isLocalDraftThread = !isServerThread;
+  const handleRuntimeModeChange = useCallback(
+    (mode: RuntimeMode) => {
+      if (mode === runtimeMode) return;
+      setComposerDraftRuntimeMode(activeThread.id, mode);
+      if (isLocalDraftThread) {
+        setDraftThreadContext(activeThread.id, { runtimeMode: mode });
+      }
+      focusComposer();
+    },
+    [
+      activeThread.id,
+      focusComposer,
+      isLocalDraftThread,
+      runtimeMode,
+      setComposerDraftRuntimeMode,
+      setDraftThreadContext,
+    ],
+  );
+  const handleInteractionModeChange = useCallback(
+    (mode: ProviderInteractionMode) => {
+      if (mode === interactionMode) return;
+      setComposerDraftInteractionMode(activeThread.id, mode);
+      if (isLocalDraftThread) {
+        setDraftThreadContext(activeThread.id, { interactionMode: mode });
+      }
+      focusComposer();
+    },
+    [
+      activeThread.id,
+      focusComposer,
+      interactionMode,
+      isLocalDraftThread,
+      setComposerDraftInteractionMode,
+      setDraftThreadContext,
+    ],
+  );
+  const toggleInteractionMode = useCallback(() => {
+    handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
+  }, [handleInteractionModeChange, interactionMode]);
+  const toggleRuntimeMode = useCallback(() => {
+    void handleRuntimeModeChange(
+      runtimeMode === "full-access" ? "approval-required" : "full-access",
+    );
+  }, [handleRuntimeModeChange, runtimeMode]);
+  const onProviderModelSelect = useCallback<
+    ComponentProps<typeof ProviderModelPicker>["onProviderModelChange"]
+  >(
+    (provider, model) => {
+      if (lockedProvider !== null && provider !== lockedProvider) {
+        focusComposer();
+        return;
+      }
+      setComposerDraftProvider(activeThread.id, provider);
+      setComposerDraftModel(
+        activeThread.id,
+        resolveAppModelSelection(provider, settings.customCodexModels, model),
+      );
+      focusComposer();
+    },
+    [
+      activeThread.id,
+      focusComposer,
+      lockedProvider,
+      setComposerDraftModel,
+      setComposerDraftProvider,
+      settings.customCodexModels,
+    ],
+  );
+  const onEffortSelect = useCallback(
+    (effort: CodexReasoningEffort) => {
+      setComposerDraftEffort(activeThread.id, effort);
+      focusComposer();
+    },
+    [activeThread.id, focusComposer, setComposerDraftEffort],
+  );
+  const onCodexFastModeChange = useCallback(
+    (enabled: boolean) => {
+      setComposerDraftCodexFastMode(activeThread.id, enabled);
+      focusComposer();
+    },
+    [activeThread.id, focusComposer, setComposerDraftCodexFastMode],
+  );
 
   const onSubmitPlanFollowUp = useCallback(
     async ({
@@ -778,7 +1237,7 @@ export default function ThreadComposer({
       const standaloneSlashCommand =
         composerImages.length === 0 ? parseStandaloneComposerSlashCommand(trimmed) : null;
       if (standaloneSlashCommand) {
-        await onHandleInteractionModeChange(standaloneSlashCommand);
+        await handleInteractionModeChange(standaloneSlashCommand);
         promptRef.current = "";
         clearComposerDraftContent(activeThread.id);
         setComposerHighlightedItemId(null);
@@ -1021,7 +1480,7 @@ export default function ThreadComposer({
       isSendBusy,
       isServerThread,
       onAdvanceActivePendingUserInput,
-      onHandleInteractionModeChange,
+      handleInteractionModeChange,
       onSubmitPlanFollowUp,
       persistThreadSettingsForNextTurn,
       prompt,
@@ -1181,7 +1640,7 @@ export default function ThreadComposer({
           }
           return;
         }
-        onHandleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+        handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
         });
@@ -1200,7 +1659,7 @@ export default function ThreadComposer({
     },
     [
       applyPromptReplacement,
-      onHandleInteractionModeChange,
+      handleInteractionModeChange,
       onProviderModelSelect,
       resolveActiveComposerTrigger,
       setComposerHighlightedItemId,
@@ -1472,7 +1931,7 @@ export default function ThreadComposer({
             <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
               <ComposerPendingApprovalPanel
                 approval={activePendingApproval}
-                pendingCount={pendingApprovalsCount}
+                pendingCount={pendingApprovals.length}
               />
             </div>
           ) : pendingUserInputs.length > 0 ? (
@@ -1595,8 +2054,10 @@ export default function ThreadComposer({
             <div className="flex items-center justify-end gap-2 px-2.5 pb-2.5 sm:px-3 sm:pb-3">
               <ComposerPendingApprovalActions
                 requestId={activePendingApproval.requestId}
-                isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
-                onRespondToApproval={onRespondToApproval}
+                isResponding={respondingApprovalRequestIds.includes(
+                  activePendingApproval.requestId,
+                )}
+                onRespondToApproval={handleRespondToApproval}
               />
             </div>
           ) : (
