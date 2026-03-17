@@ -84,6 +84,7 @@ import {
 } from "../types";
 import { basenameOfPath } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
+import { useActiveProject } from "../hooks/useActiveProject";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -193,6 +194,42 @@ interface ChatViewProps {
 export default function ChatView({ threadId }: ChatViewProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
+  const draftThread = useComposerDraftStore(
+    (store) => store.draftThreadsByThreadId[threadId] ?? null,
+  );
+  const chatViewState = useChatViewStateStore((state) =>
+    selectThreadChatViewState(state.chatViewStateByThreadId, threadId),
+  );
+  const serverThread = threads.find((t) => t.id === threadId);
+  const fallbackDraftProject = projects.find((project) => project.id === draftThread?.projectId);
+  const localDraftError = serverThread ? null : chatViewState.localDraftError;
+  const localDraftThread = useMemo(
+    () =>
+      draftThread
+        ? buildLocalDraftThread(
+            threadId,
+            draftThread,
+            fallbackDraftProject?.model ?? DEFAULT_MODEL_BY_PROVIDER.codex,
+            localDraftError,
+          )
+        : undefined,
+    [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
+  );
+  const activeThread = serverThread ?? localDraftThread;
+
+  if (!activeThread) {
+    return <ChatViewEmptyState />;
+  }
+
+  return <ChatViewContent threadId={threadId} activeThread={activeThread} />;
+}
+
+interface ChatViewContentProps extends ChatViewProps {
+  activeThread: import("../types").Thread;
+}
+
+function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
+  const threads = useStore((store) => store.threads);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -322,9 +359,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const terminalState = useTerminalStateStore((state) =>
     selectThreadTerminalState(state.terminalStateByThreadId, threadId),
   );
-  const chatViewState = useChatViewStateStore((state) =>
-    selectThreadChatViewState(state.chatViewStateByThreadId, threadId),
-  );
   const storeSetTerminalOpen = useTerminalStateStore((s) => s.setTerminalOpen);
   const storeSetTerminalHeight = useTerminalStateStore((s) => s.setTerminalHeight);
   const storeSplitTerminal = useTerminalStateStore((s) => s.splitTerminal);
@@ -359,33 +393,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
 
   const serverThread = threads.find((t) => t.id === threadId);
-  const fallbackDraftProject = projects.find((project) => project.id === draftThread?.projectId);
-  const localDraftError = serverThread ? null : chatViewState.localDraftError;
-  const localDraftThread = useMemo(
-    () =>
-      draftThread
-        ? buildLocalDraftThread(
-            threadId,
-            draftThread,
-            fallbackDraftProject?.model ?? DEFAULT_MODEL_BY_PROVIDER.codex,
-            localDraftError,
-          )
-        : undefined,
-    [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
-  );
-  const activeThread = serverThread ?? localDraftThread;
-  const runtimeMode =
-    composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const runtimeMode = composerDraft.runtimeMode ?? activeThread.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
-    composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+    composerDraft.interactionMode ?? activeThread.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
-  const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
+  const isLocalDraftThread = !isServerThread;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const diffOpen = rawSearch.diff === "1";
-  const activeThreadId = activeThread?.id ?? null;
-  const activeLatestTurn = activeThread?.latestTurn ?? null;
-  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
-  const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+  const activeThreadId = activeThread.id;
+  const activeLatestTurn = activeThread.latestTurn ?? null;
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread.session ?? null);
+  const activeProject = useActiveProject(activeThread);
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -3183,32 +3201,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     void onRevertToTurnCount(targetTurnCount);
   };
 
-  // Empty state: no active thread
-  if (!activeThread) {
-    return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-muted-foreground/40">
-        {!isElectron && (
-          <header className="border-b border-border px-3 py-2 md:hidden">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger className="size-7 shrink-0" />
-              <span className="text-sm font-medium text-foreground">Threads</span>
-            </div>
-          </header>
-        )}
-        {isElectron && (
-          <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
-          </div>
-        )}
-        <div className="flex flex-1 items-center justify-center">
-          <div className="text-center">
-            <p className="text-sm">Select a thread or create a new one to get started.</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
@@ -3219,19 +3211,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
         )}
       >
         <ChatHeader
-          activeThreadId={activeThread.id}
-          activeThreadTitle={activeThread.title}
-          activeProjectName={activeProject?.name}
-          isGitRepo={isGitRepo}
-          openInCwd={activeThread.worktreePath ?? activeProject?.cwd ?? null}
-          activeProjectScripts={activeProject?.scripts}
+          activeThread={activeThread}
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
           keybindings={keybindings}
           availableEditors={availableEditors}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
-          gitCwd={gitCwd}
           diffOpen={diffOpen}
           onRunProjectScript={(script) => {
             void runProjectScript(script);
@@ -3919,6 +3905,31 @@ export default function ChatView({ threadId }: ChatViewProps) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ChatViewEmptyState() {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-muted-foreground/40">
+      {!isElectron && (
+        <header className="border-b border-border px-3 py-2 md:hidden">
+          <div className="flex items-center gap-2">
+            <SidebarTrigger className="size-7 shrink-0" />
+            <span className="text-sm font-medium text-foreground">Threads</span>
+          </div>
+        </header>
+      )}
+      {isElectron && (
+        <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
+          <span className="text-xs text-muted-foreground/50">No active thread</span>
+        </div>
+      )}
+      <div className="flex flex-1 items-center justify-center">
+        <div className="text-center">
+          <p className="text-sm">Select a thread or create a new one to get started.</p>
+        </div>
+      </div>
     </div>
   );
 }

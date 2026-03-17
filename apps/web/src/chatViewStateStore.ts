@@ -1,3 +1,10 @@
+/**
+ * Single Zustand store for chat view UI state keyed by threadId.
+ *
+ * Chat view transition helpers are intentionally private to keep the public
+ * API constrained to store actions/selectors.
+ */
+
 import type { ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
