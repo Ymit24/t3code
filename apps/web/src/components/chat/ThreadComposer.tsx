@@ -1,9 +1,11 @@
 import {
   type ApprovalRequestId,
   type CodexReasoningEffort,
+  DEFAULT_MODEL_BY_PROVIDER,
   type ModelSlug,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type ProjectScript,
   type ProviderApprovalDecision,
   type ProviderKind,
   ProviderInteractionMode,
@@ -39,6 +41,7 @@ import {
   collapseExpandedComposerCursor,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
+  parseStandaloneComposerSlashCommand,
   replaceTextRange,
   type ComposerTrigger,
 } from "../../composer-logic";
@@ -48,21 +51,20 @@ import {
   setPendingUserInputCustomAnswer,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
-import { proposedPlanTitle } from "../../proposedPlan";
+import { proposedPlanTitle, resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import {
   type ActivePlanState,
   type LatestProposedPlanState,
   type PendingApproval,
   type PendingUserInput,
 } from "../../session-logic";
-import { type SessionPhase } from "../../types";
+import { type ChatMessage, type Project, type SessionPhase, type Thread } from "../../types";
 import { basenameOfPath } from "../../vscode-icons";
-import { type ComposerImageAttachment } from "../../composerDraftStore";
+import { type ComposerImageAttachment, type DraftThreadEnvMode } from "../../composerDraftStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Separator } from "../ui/separator";
-import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { CodexTraitsPicker } from "./CodexTraitsPicker";
@@ -73,11 +75,25 @@ import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { newCommandId, newMessageId } from "~/lib/utils";
+import { readNativeApi } from "~/nativeApi";
+import { setupProjectScript } from "~/projectScripts";
+import {
+  buildTemporaryWorktreeBranchName,
+  cloneComposerImageForRetry,
+  readFileAsDataUrl,
+  revokeUserMessagePreviewUrls,
+  type SendPhase,
+} from "../ChatView.logic";
+import { truncateTitle } from "../../truncateTitle";
+import { toastManager } from "../ui/toast";
 
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+const IMAGE_ONLY_BOOTSTRAP_PROMPT =
+  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -103,7 +119,10 @@ interface ComposerSearchableModelOption {
 export interface ThreadComposerProps {
   activePlan: ActivePlanState | null;
   activePendingApproval: PendingApproval | null;
+  activeProject: Project | null;
   activeProposedPlan: LatestProposedPlanState | null;
+  activeThread: Thread;
+  assistantStreamingEnabled: boolean;
   composerCursor: number;
   composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
   composerFormRef: RefObject<HTMLFormElement | null>;
@@ -114,6 +133,7 @@ export interface ThreadComposerProps {
   isComposerFooterCompact: boolean;
   isConnecting: boolean;
   isGitRepo: boolean;
+  isServerThread: boolean;
   isPreparingWorktree: boolean;
   isSendBusy: boolean;
   interactionMode: ProviderInteractionMode;
@@ -122,12 +142,22 @@ export interface ThreadComposerProps {
   nonPersistedComposerImageIdSet: ReadonlySet<string>;
   addComposerImage: (image: ComposerImageAttachment) => void;
   addComposerImagesToDraft: (images: ComposerImageAttachment[]) => void;
+  beginSendPhase: (nextPhase: Exclude<SendPhase, "idle">) => void;
+  clearComposerDraftContent: (threadId: ThreadId) => void;
+  createWorktree: (input: {
+    cwd: string;
+    branch: string;
+    newBranch: string;
+  }) => Promise<{ worktree: { branch: string; path: string } }>;
+  envMode: DraftThreadEnvMode;
   focusComposer: () => void;
+  forceStickToBottom: () => void;
   onCodexFastModeChange: (enabled: boolean) => void;
   onHandleInteractionModeChange: (mode: ProviderInteractionMode) => void;
   onEffortSelect: (effort: CodexReasoningEffort) => void;
   onImplementPlanInNewThread: () => Promise<void>;
   onInterrupt: () => Promise<void>;
+  onOpenPlanSidebarForExecution: () => void;
   onProviderModelSelect: ComponentProps<typeof ProviderModelPicker>["onProviderModelChange"];
   onRespondToApproval: (
     requestId: ApprovalRequestId,
@@ -137,31 +167,71 @@ export interface ThreadComposerProps {
     requestId: ApprovalRequestId,
     answers: Record<string, unknown>,
   ) => Promise<void>;
-  onSubmit: (e?: { preventDefault: () => void }) => Promise<void>;
   pendingApprovalsCount: number;
   pendingUserInputs: PendingUserInput[];
+  persistThreadSettingsForNextTurn: (input: {
+    threadId: ThreadId;
+    createdAt: string;
+    model?: string;
+    runtimeMode: RuntimeMode;
+    interactionMode: ProviderInteractionMode;
+  }) => Promise<void>;
   phase: SessionPhase;
   planSidebarOpen: boolean;
+  providerOptionsForDispatch:
+    | {
+        codex?: {
+          binaryPath?: string;
+          homePath?: string;
+        };
+      }
+    | undefined;
   prompt: string;
   promptRef: RefObject<string>;
   reasoningOptions: ComponentProps<typeof CodexTraitsPicker>["options"];
   resolvedTheme: "light" | "dark";
   respondingRequestIds: ApprovalRequestId[];
   removeComposerImageFromDraft: (imageId: string) => void;
+  resetSendPhase: () => void;
   runtimeMode: RuntimeMode;
+  runProjectScript: (
+    script: ProjectScript,
+    options?: {
+      cwd?: string;
+      worktreePath?: string | null;
+      rememberAsLastInvoked?: boolean;
+      allowLocalDraftThread?: boolean;
+    },
+  ) => Promise<void>;
   searchableModelOptions: ComposerSearchableModelOption[];
   selectedCodexFastModeEnabled: boolean;
   selectedEffort: CodexReasoningEffort | null;
+  selectedModel: ModelSlug;
+  selectedModelOptionsForDispatch:
+    | {
+        codex?: {
+          reasoningEffort?: CodexReasoningEffort;
+          fastMode?: true;
+        };
+      }
+    | undefined;
   selectedModelForPickerWithCustomFallback: ComponentProps<typeof ProviderModelPicker>["model"];
   selectedProvider: ProviderKind;
+  sendInFlightRef: RefObject<boolean>;
   setExpandedImage: Dispatch<SetStateAction<ExpandedImagePreview | null>>;
   setComposerCursor: Dispatch<SetStateAction<number>>;
+  setComposerDraftInteractionMode: (threadId: ThreadId, mode: ProviderInteractionMode) => void;
   setComposerHighlightedItemId: Dispatch<SetStateAction<string | null>>;
   setComposerTrigger: Dispatch<SetStateAction<ComposerTrigger | null>>;
+  setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   setPrompt: (nextPrompt: string) => void;
+  setStoreThreadBranch: (
+    threadId: ThreadId,
+    branch: string | null,
+    worktreePath: string | null,
+  ) => void;
   setThreadError: (targetThreadId: ThreadId | null, error: string | null) => void;
   showPlanFollowUpPrompt: boolean;
-  threadId: ThreadId;
   toggleInteractionMode: () => void;
   togglePlanSidebar: () => void;
   toggleRuntimeMode: () => void;
@@ -170,7 +240,10 @@ export interface ThreadComposerProps {
 export default function ThreadComposer({
   activePlan,
   activePendingApproval,
+  activeProject,
   activeProposedPlan,
+  activeThread,
+  assistantStreamingEnabled,
   composerCursor,
   composerEditorRef,
   composerFormRef,
@@ -181,6 +254,7 @@ export default function ThreadComposer({
   isComposerFooterCompact,
   isConnecting,
   isGitRepo,
+  isServerThread,
   isPreparingWorktree,
   isSendBusy,
   interactionMode,
@@ -189,40 +263,54 @@ export default function ThreadComposer({
   nonPersistedComposerImageIdSet,
   addComposerImage,
   addComposerImagesToDraft,
+  beginSendPhase,
+  clearComposerDraftContent,
+  createWorktree,
+  envMode,
   focusComposer,
+  forceStickToBottom,
   onCodexFastModeChange,
   onHandleInteractionModeChange,
   onEffortSelect,
   onImplementPlanInNewThread,
   onInterrupt,
+  onOpenPlanSidebarForExecution,
   onProviderModelSelect,
   onRespondToApproval,
   onRespondToUserInput,
-  onSubmit,
   pendingApprovalsCount,
   pendingUserInputs,
+  persistThreadSettingsForNextTurn,
   phase,
   planSidebarOpen,
+  providerOptionsForDispatch,
   prompt,
   promptRef,
   reasoningOptions,
   resolvedTheme,
   respondingRequestIds,
   removeComposerImageFromDraft,
+  resetSendPhase,
   runtimeMode,
+  runProjectScript,
   searchableModelOptions,
   selectedCodexFastModeEnabled,
   selectedEffort,
+  selectedModel,
+  selectedModelOptionsForDispatch,
   selectedModelForPickerWithCustomFallback,
   selectedProvider,
+  sendInFlightRef,
   setExpandedImage,
   setComposerCursor,
+  setComposerDraftInteractionMode,
   setComposerHighlightedItemId,
   setComposerTrigger,
+  setOptimisticUserMessages,
   setPrompt,
+  setStoreThreadBranch,
   setThreadError,
   showPlanFollowUpPrompt,
-  threadId,
   toggleInteractionMode,
   togglePlanSidebar,
   toggleRuntimeMode,
@@ -236,6 +324,7 @@ export default function ThreadComposer({
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
+  const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerSelectLockRef = useRef(false);
   const dragDepthRef = useRef(0);
   const lastSyncedPendingInputRef = useRef<{
@@ -399,7 +488,11 @@ export default function ThreadComposer({
   useEffect(() => {
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
-  }, [threadId]);
+  }, [activeThread.id]);
+
+  useEffect(() => {
+    composerImagesRef.current = composerImages;
+  }, [composerImages]);
 
   useEffect(() => {
     const nextCustomAnswer = activePendingProgress?.customAnswer;
@@ -543,6 +636,116 @@ export default function ThreadComposer({
     setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
   }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
 
+  const isLocalDraftThread = !isServerThread;
+
+  const onSubmitPlanFollowUp = useCallback(
+    async ({
+      text,
+      interactionMode: nextInteractionMode,
+    }: {
+      text: string;
+      interactionMode: "default" | "plan";
+    }) => {
+      const api = readNativeApi();
+      if (!api || !isServerThread || isSendBusy || isConnecting || sendInFlightRef.current) {
+        return;
+      }
+
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return;
+      }
+
+      const threadIdForSend = activeThread.id;
+      const messageIdForSend = newMessageId();
+      const messageCreatedAt = new Date().toISOString();
+
+      sendInFlightRef.current = true;
+      beginSendPhase("sending-turn");
+      setThreadError(threadIdForSend, null);
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: trimmed,
+          createdAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+      forceStickToBottom();
+
+      try {
+        await persistThreadSettingsForNextTurn({
+          threadId: threadIdForSend,
+          createdAt: messageCreatedAt,
+          ...(selectedModel ? { model: selectedModel } : {}),
+          runtimeMode,
+          interactionMode: nextInteractionMode,
+        });
+
+        setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
+
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: threadIdForSend,
+          message: {
+            messageId: messageIdForSend,
+            role: "user",
+            text: trimmed,
+            attachments: [],
+          },
+          provider: selectedProvider,
+          model: selectedModel || undefined,
+          ...(selectedModelOptionsForDispatch
+            ? { modelOptions: selectedModelOptionsForDispatch }
+            : {}),
+          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          assistantDeliveryMode: assistantStreamingEnabled ? "streaming" : "buffered",
+          runtimeMode,
+          interactionMode: nextInteractionMode,
+          createdAt: messageCreatedAt,
+        });
+        if (nextInteractionMode === "default") {
+          onOpenPlanSidebarForExecution();
+        }
+        sendInFlightRef.current = false;
+      } catch (err) {
+        setOptimisticUserMessages((existing) =>
+          existing.filter((message) => message.id !== messageIdForSend),
+        );
+        setThreadError(
+          threadIdForSend,
+          err instanceof Error ? err.message : "Failed to send plan follow-up.",
+        );
+        sendInFlightRef.current = false;
+        resetSendPhase();
+      }
+    },
+    [
+      activeThread.id,
+      assistantStreamingEnabled,
+      beginSendPhase,
+      forceStickToBottom,
+      isConnecting,
+      isSendBusy,
+      isServerThread,
+      onOpenPlanSidebarForExecution,
+      persistThreadSettingsForNextTurn,
+      providerOptionsForDispatch,
+      resetSendPhase,
+      runtimeMode,
+      selectedModel,
+      selectedModelOptionsForDispatch,
+      selectedProvider,
+      sendInFlightRef,
+      setComposerDraftInteractionMode,
+      setOptimisticUserMessages,
+      setThreadError,
+    ],
+  );
+
   const handleSubmit = useCallback(
     async (event?: { preventDefault: () => void }) => {
       event?.preventDefault();
@@ -550,9 +753,296 @@ export default function ThreadComposer({
         await onAdvanceActivePendingUserInput();
         return;
       }
-      await onSubmit();
+
+      const api = readNativeApi();
+      if (!api || isSendBusy || isConnecting || sendInFlightRef.current) return;
+
+      const trimmed = prompt.trim();
+      if (showPlanFollowUpPrompt && activeProposedPlan) {
+        const followUp = resolvePlanFollowUpSubmission({
+          draftText: trimmed,
+          planMarkdown: activeProposedPlan.planMarkdown,
+        });
+        promptRef.current = "";
+        clearComposerDraftContent(activeThread.id);
+        setComposerHighlightedItemId(null);
+        setComposerCursor(0);
+        setComposerTrigger(null);
+        await onSubmitPlanFollowUp({
+          text: followUp.text,
+          interactionMode: followUp.interactionMode,
+        });
+        return;
+      }
+
+      const standaloneSlashCommand =
+        composerImages.length === 0 ? parseStandaloneComposerSlashCommand(trimmed) : null;
+      if (standaloneSlashCommand) {
+        await onHandleInteractionModeChange(standaloneSlashCommand);
+        promptRef.current = "";
+        clearComposerDraftContent(activeThread.id);
+        setComposerHighlightedItemId(null);
+        setComposerCursor(0);
+        setComposerTrigger(null);
+        return;
+      }
+
+      if (!trimmed && composerImages.length === 0) return;
+      if (!activeProject) return;
+
+      const threadIdForSend = activeThread.id;
+      const isFirstMessage = isLocalDraftThread || activeThread.messages.length === 0;
+      const baseBranchForWorktree =
+        isFirstMessage && envMode === "worktree" && !activeThread.worktreePath
+          ? activeThread.branch
+          : null;
+      const shouldCreateWorktree =
+        isFirstMessage && envMode === "worktree" && !activeThread.worktreePath;
+
+      if (shouldCreateWorktree && !activeThread.branch) {
+        setThreadError(
+          threadIdForSend,
+          "Select a base branch before sending in New worktree mode.",
+        );
+        return;
+      }
+
+      sendInFlightRef.current = true;
+      beginSendPhase(baseBranchForWorktree ? "preparing-worktree" : "sending-turn");
+
+      const composerImagesSnapshot = [...composerImages];
+      const messageIdForSend = newMessageId();
+      const messageCreatedAt = new Date().toISOString();
+      const turnAttachmentsPromise = Promise.all(
+        composerImagesSnapshot.map(async (image) => ({
+          type: "image" as const,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: await readFileAsDataUrl(image.file),
+        })),
+      );
+      const optimisticAttachments = composerImagesSnapshot.map((image) => ({
+        type: "image" as const,
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        previewUrl: image.previewUrl,
+      }));
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: trimmed,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          createdAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+      forceStickToBottom();
+
+      setThreadError(threadIdForSend, null);
+      promptRef.current = "";
+      clearComposerDraftContent(threadIdForSend);
+      setComposerHighlightedItemId(null);
+      setComposerCursor(0);
+      setComposerTrigger(null);
+
+      let createdServerThreadForLocalDraft = false;
+      let turnStartSucceeded = false;
+      let nextThreadBranch = activeThread.branch;
+      let nextThreadWorktreePath = activeThread.worktreePath;
+      await (async () => {
+        if (baseBranchForWorktree) {
+          beginSendPhase("preparing-worktree");
+          const result = await createWorktree({
+            cwd: activeProject.cwd,
+            branch: baseBranchForWorktree,
+            newBranch: buildTemporaryWorktreeBranchName(),
+          });
+          nextThreadBranch = result.worktree.branch;
+          nextThreadWorktreePath = result.worktree.path;
+          if (isServerThread) {
+            await api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+            });
+            setStoreThreadBranch(threadIdForSend, result.worktree.branch, result.worktree.path);
+          }
+        }
+
+        let titleSeed = trimmed;
+        if (!titleSeed) {
+          const firstComposerImageName = composerImagesSnapshot[0]?.name ?? null;
+          titleSeed = firstComposerImageName ? `Image: ${firstComposerImageName}` : "New thread";
+        }
+        const title = truncateTitle(titleSeed);
+        const threadCreateModel: ModelSlug =
+          selectedModel || (activeProject.model as ModelSlug) || DEFAULT_MODEL_BY_PROVIDER.codex;
+
+        if (isLocalDraftThread) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.create",
+            commandId: newCommandId(),
+            threadId: threadIdForSend,
+            projectId: activeProject.id,
+            title,
+            model: threadCreateModel,
+            runtimeMode,
+            interactionMode,
+            branch: nextThreadBranch,
+            worktreePath: nextThreadWorktreePath,
+            createdAt: activeThread.createdAt,
+          });
+          createdServerThreadForLocalDraft = true;
+        }
+
+        const setupScript = baseBranchForWorktree
+          ? setupProjectScript(activeProject.scripts)
+          : null;
+        if (setupScript) {
+          const shouldRunSetupScript = isServerThread || createdServerThreadForLocalDraft;
+          if (shouldRunSetupScript) {
+            const setupScriptOptions: Parameters<typeof runProjectScript>[1] = {
+              worktreePath: nextThreadWorktreePath,
+              rememberAsLastInvoked: false,
+              allowLocalDraftThread: createdServerThreadForLocalDraft,
+            };
+            if (nextThreadWorktreePath) {
+              setupScriptOptions.cwd = nextThreadWorktreePath;
+            }
+            await runProjectScript(setupScript, setupScriptOptions);
+          }
+        }
+
+        if (isFirstMessage && isServerThread) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: threadIdForSend,
+            title,
+          });
+        }
+
+        if (isServerThread) {
+          await persistThreadSettingsForNextTurn({
+            threadId: threadIdForSend,
+            createdAt: messageCreatedAt,
+            ...(selectedModel ? { model: selectedModel } : {}),
+            runtimeMode,
+            interactionMode,
+          });
+        }
+
+        beginSendPhase("sending-turn");
+        const turnAttachments = await turnAttachmentsPromise;
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: threadIdForSend,
+          message: {
+            messageId: messageIdForSend,
+            role: "user",
+            text: trimmed || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+            attachments: turnAttachments,
+          },
+          model: selectedModel || undefined,
+          ...(selectedModelOptionsForDispatch
+            ? { modelOptions: selectedModelOptionsForDispatch }
+            : {}),
+          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          provider: selectedProvider,
+          assistantDeliveryMode: assistantStreamingEnabled ? "streaming" : "buffered",
+          runtimeMode,
+          interactionMode,
+          createdAt: messageCreatedAt,
+        });
+        turnStartSucceeded = true;
+      })().catch(async (err: unknown) => {
+        if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
+          await api.orchestration
+            .dispatchCommand({
+              type: "thread.delete",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+            })
+            .catch(() => undefined);
+        }
+        if (
+          !turnStartSucceeded &&
+          promptRef.current.length === 0 &&
+          composerImagesRef.current.length === 0
+        ) {
+          setOptimisticUserMessages((existing) => {
+            const removed = existing.filter((message) => message.id === messageIdForSend);
+            for (const message of removed) {
+              revokeUserMessagePreviewUrls(message);
+            }
+            const next = existing.filter((message) => message.id !== messageIdForSend);
+            return next.length === existing.length ? existing : next;
+          });
+          promptRef.current = trimmed;
+          setPrompt(trimmed);
+          setComposerCursor(collapseExpandedComposerCursor(trimmed, trimmed.length));
+          addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageForRetry));
+          setComposerTrigger(detectComposerTrigger(trimmed, trimmed.length));
+        }
+        setThreadError(
+          threadIdForSend,
+          err instanceof Error ? err.message : "Failed to send message.",
+        );
+      });
+      sendInFlightRef.current = false;
+      if (!turnStartSucceeded) {
+        resetSendPhase();
+      }
     },
-    [activePendingProgress, onAdvanceActivePendingUserInput, onSubmit],
+    [
+      activePendingProgress,
+      activeProject,
+      activeProposedPlan,
+      activeThread,
+      addComposerImagesToDraft,
+      assistantStreamingEnabled,
+      beginSendPhase,
+      clearComposerDraftContent,
+      composerImages,
+      createWorktree,
+      envMode,
+      forceStickToBottom,
+      interactionMode,
+      isConnecting,
+      isLocalDraftThread,
+      isSendBusy,
+      isServerThread,
+      onAdvanceActivePendingUserInput,
+      onHandleInteractionModeChange,
+      onSubmitPlanFollowUp,
+      persistThreadSettingsForNextTurn,
+      prompt,
+      promptRef,
+      providerOptionsForDispatch,
+      resetSendPhase,
+      runtimeMode,
+      runProjectScript,
+      selectedModel,
+      selectedModelOptionsForDispatch,
+      selectedProvider,
+      sendInFlightRef,
+      setComposerCursor,
+      setComposerHighlightedItemId,
+      setComposerTrigger,
+      setOptimisticUserMessages,
+      setPrompt,
+      setStoreThreadBranch,
+      setThreadError,
+      showPlanFollowUpPrompt,
+    ],
   );
 
   useEffect(() => {
@@ -869,15 +1359,15 @@ export default function ThreadComposer({
       } else if (nextImages.length > 1) {
         addComposerImagesToDraft(nextImages);
       }
-      setThreadError(threadId, error);
+      setThreadError(activeThread.id, error);
     },
     [
+      activeThread.id,
       addComposerImage,
       addComposerImagesToDraft,
       composerImages.length,
       pendingUserInputs.length,
       setThreadError,
-      threadId,
     ],
   );
 
