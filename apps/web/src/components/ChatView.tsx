@@ -5,8 +5,6 @@ import {
   type MessageId,
   type ProjectScript,
   type ModelSlug,
-  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ProviderApprovalDecision,
   type ProviderKind,
   type ThreadId,
@@ -82,7 +80,7 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { Button } from "./ui/button";
-import { cn, randomUUID } from "~/lib/utils";
+import { cn } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 import { projectScriptRuntimeEnv, setupProjectScript } from "~/projectScripts";
 import { SidebarTrigger } from "./ui/sidebar";
@@ -102,7 +100,7 @@ import { type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
-import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import ThreadComposer from "./chat/ThreadComposer";
@@ -121,7 +119,6 @@ import {
 } from "./ChatView.logic";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
-const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
@@ -220,7 +217,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
   const promptRef = useRef(prompt);
-  const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
@@ -279,7 +275,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
-  const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     messagesScrollRef.current = element;
@@ -1337,8 +1332,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     setComposerHighlightedItemId(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
-    dragDepthRef.current = 0;
-    setIsDragOverComposer(false);
     setExpandedImage(null);
   }, [threadId]);
 
@@ -1538,125 +1531,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     runProjectScript,
     onToggleDiff,
   });
-
-  const addComposerImages = (files: File[]) => {
-    if (!activeThreadId || files.length === 0) return;
-
-    if (pendingUserInputs.length > 0) {
-      toastManager.add({
-        type: "error",
-        title: "Attach images after answering plan questions.",
-      });
-      return;
-    }
-
-    const nextImages: ComposerImageAttachment[] = [];
-    let nextImageCount = composerImagesRef.current.length;
-    let error: string | null = null;
-    for (const file of files) {
-      if (!file.type.startsWith("image/")) {
-        error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
-        continue;
-      }
-      if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-        error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
-        continue;
-      }
-      if (nextImageCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
-        error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
-        break;
-      }
-
-      const previewUrl = URL.createObjectURL(file);
-      nextImages.push({
-        type: "image",
-        id: randomUUID(),
-        name: file.name || "image",
-        mimeType: file.type,
-        sizeBytes: file.size,
-        previewUrl,
-        file,
-      });
-      nextImageCount += 1;
-    }
-
-    if (nextImages.length === 1 && nextImages[0]) {
-      addComposerImage(nextImages[0]);
-    } else if (nextImages.length > 1) {
-      addComposerImagesToDraft(nextImages);
-    }
-    setThreadError(activeThreadId, error);
-  };
-
-  const removeComposerImage = (imageId: string) => {
-    removeComposerImageFromDraft(imageId);
-  };
-  const onPreviewComposerImage = useCallback(
-    (imageId: string) => {
-      const preview = buildExpandedImagePreview(composerImages, imageId);
-      if (!preview) return;
-      setExpandedImage(preview);
-    },
-    [composerImages],
-  );
-
-  const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
-    const files = Array.from(event.clipboardData.files);
-    if (files.length === 0) {
-      return;
-    }
-    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-    if (imageFiles.length === 0) {
-      return;
-    }
-    event.preventDefault();
-    addComposerImages(imageFiles);
-  };
-
-  const onComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
-      return;
-    }
-    event.preventDefault();
-    dragDepthRef.current += 1;
-    setIsDragOverComposer(true);
-  };
-
-  const onComposerDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    setIsDragOverComposer(true);
-  };
-
-  const onComposerDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
-      return;
-    }
-    event.preventDefault();
-    const nextTarget = event.relatedTarget;
-    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
-      return;
-    }
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) {
-      setIsDragOverComposer(false);
-    }
-  };
-
-  const onComposerDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
-      return;
-    }
-    event.preventDefault();
-    dragDepthRef.current = 0;
-    setIsDragOverComposer(false);
-    const files = Array.from(event.dataTransfer.files);
-    addComposerImages(files);
-    focusComposer();
-  };
 
   const onRevertToTurnCount = useCallback(
     async (turnCount: number) => {
@@ -2569,7 +2443,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             isComposerApprovalState={isComposerApprovalState}
             isComposerFooterCompact={isComposerFooterCompact}
             isConnecting={isConnecting}
-            isDragOverComposer={isDragOverComposer}
             isGitRepo={isGitRepo}
             isPreparingWorktree={isPreparingWorktree}
             isSendBusy={isSendBusy}
@@ -2577,17 +2450,14 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             lockedProvider={lockedProvider}
             modelOptionsByProvider={modelOptionsByProvider}
             nonPersistedComposerImageIdSet={nonPersistedComposerImageIdSet}
+            addComposerImage={addComposerImage}
+            addComposerImagesToDraft={addComposerImagesToDraft}
+            focusComposer={focusComposer}
             gitCwd={gitCwd}
             onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
             onChangeActivePendingUserInputCustomAnswer={onChangeActivePendingUserInputCustomAnswer}
             onCodexFastModeChange={onCodexFastModeChange}
-            onComposerDragEnter={onComposerDragEnter}
-            onComposerDragLeave={onComposerDragLeave}
-            onComposerDragOver={onComposerDragOver}
-            onComposerDrop={onComposerDrop}
-            onComposerImagePreview={onPreviewComposerImage}
             onHandleInteractionModeChange={handleInteractionModeChange}
-            onComposerPaste={onComposerPaste}
             onEffortSelect={onEffortSelect}
             onImplementPlanInNewThread={onImplementPlanInNewThread}
             onInterrupt={onInterrupt}
@@ -2603,21 +2473,24 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             prompt={prompt}
             promptRef={promptRef}
             reasoningOptions={reasoningOptions}
-            removeComposerImage={removeComposerImage}
             resolvedTheme={resolvedTheme}
             respondingRequestIds={respondingRequestIds}
             respondingUserInputRequestIds={respondingUserInputRequestIds}
+            removeComposerImageFromDraft={removeComposerImageFromDraft}
             runtimeMode={runtimeMode}
             searchableModelOptions={searchableModelOptions}
             selectedCodexFastModeEnabled={selectedCodexFastModeEnabled}
             selectedEffort={selectedEffort}
             selectedModelForPickerWithCustomFallback={selectedModelForPickerWithCustomFallback}
             selectedProvider={selectedProvider}
+            setExpandedImage={setExpandedImage}
             setComposerCursor={setComposerCursor}
             setComposerHighlightedItemId={setComposerHighlightedItemId}
             setComposerTrigger={setComposerTrigger}
             setPrompt={setPrompt}
+            setThreadError={setThreadError}
             showPlanFollowUpPrompt={showPlanFollowUpPrompt}
+            threadId={activeThread.id}
             toggleInteractionMode={toggleInteractionMode}
             togglePlanSidebar={togglePlanSidebar}
             toggleRuntimeMode={toggleRuntimeMode}

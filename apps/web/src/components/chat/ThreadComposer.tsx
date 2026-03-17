@@ -2,11 +2,14 @@ import {
   type ApprovalRequestId,
   type CodexReasoningEffort,
   type ModelSlug,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ProviderApprovalDecision,
   type ProviderKind,
   ProviderInteractionMode,
   RuntimeMode,
   type ProjectEntry,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery } from "@tanstack/react-query";
@@ -28,9 +31,10 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
-import { cn } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 import {
   collapseExpandedComposerCursor,
   detectComposerTrigger,
@@ -56,7 +60,9 @@ import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../Compos
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Separator } from "../ui/separator";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { CodexTraitsPicker } from "./CodexTraitsPicker";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
@@ -68,6 +74,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
+const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -114,7 +121,6 @@ export interface ThreadComposerProps {
   isComposerApprovalState: boolean;
   isComposerFooterCompact: boolean;
   isConnecting: boolean;
-  isDragOverComposer: boolean;
   isGitRepo: boolean;
   isPreparingWorktree: boolean;
   isSendBusy: boolean;
@@ -122,6 +128,9 @@ export interface ThreadComposerProps {
   lockedProvider: ProviderKind | null;
   modelOptionsByProvider: ComponentProps<typeof ProviderModelPicker>["modelOptionsByProvider"];
   nonPersistedComposerImageIdSet: ReadonlySet<string>;
+  addComposerImage: (image: ComposerImageAttachment) => void;
+  addComposerImagesToDraft: (images: ComposerImageAttachment[]) => void;
+  focusComposer: () => void;
   onAdvanceActivePendingUserInput: () => void;
   onChangeActivePendingUserInputCustomAnswer: (
     questionId: string,
@@ -131,13 +140,7 @@ export interface ThreadComposerProps {
     cursorAdjacentToMention: boolean,
   ) => void;
   onCodexFastModeChange: (enabled: boolean) => void;
-  onComposerDragEnter: ComponentProps<"div">["onDragEnter"];
-  onComposerDragLeave: ComponentProps<"div">["onDragLeave"];
-  onComposerDragOver: ComponentProps<"div">["onDragOver"];
-  onComposerDrop: ComponentProps<"div">["onDrop"];
-  onComposerImagePreview: (imageId: string) => void;
   onHandleInteractionModeChange: (mode: ProviderInteractionMode) => void;
-  onComposerPaste: ComponentProps<typeof ComposerPromptEditor>["onPaste"];
   onEffortSelect: (effort: CodexReasoningEffort) => void;
   onImplementPlanInNewThread: () => Promise<void>;
   onInterrupt: () => Promise<void>;
@@ -156,21 +159,24 @@ export interface ThreadComposerProps {
   prompt: string;
   promptRef: RefObject<string>;
   reasoningOptions: ComponentProps<typeof CodexTraitsPicker>["options"];
-  removeComposerImage: (imageId: string) => void;
   resolvedTheme: "light" | "dark";
   respondingRequestIds: ApprovalRequestId[];
   respondingUserInputRequestIds: ApprovalRequestId[];
+  removeComposerImageFromDraft: (imageId: string) => void;
   runtimeMode: RuntimeMode;
   searchableModelOptions: ComposerSearchableModelOption[];
   selectedCodexFastModeEnabled: boolean;
   selectedEffort: CodexReasoningEffort | null;
   selectedModelForPickerWithCustomFallback: ComponentProps<typeof ProviderModelPicker>["model"];
   selectedProvider: ProviderKind;
+  setExpandedImage: Dispatch<SetStateAction<ExpandedImagePreview | null>>;
   setComposerCursor: Dispatch<SetStateAction<number>>;
   setComposerHighlightedItemId: Dispatch<SetStateAction<string | null>>;
   setComposerTrigger: Dispatch<SetStateAction<ComposerTrigger | null>>;
   setPrompt: (nextPrompt: string) => void;
+  setThreadError: (targetThreadId: ThreadId | null, error: string | null) => void;
   showPlanFollowUpPrompt: boolean;
+  threadId: ThreadId;
   toggleInteractionMode: () => void;
   togglePlanSidebar: () => void;
   toggleRuntimeMode: () => void;
@@ -200,7 +206,6 @@ export default function ThreadComposer({
   isComposerApprovalState,
   isComposerFooterCompact,
   isConnecting,
-  isDragOverComposer,
   isGitRepo,
   isPreparingWorktree,
   isSendBusy,
@@ -208,16 +213,13 @@ export default function ThreadComposer({
   lockedProvider,
   modelOptionsByProvider,
   nonPersistedComposerImageIdSet,
+  addComposerImage,
+  addComposerImagesToDraft,
+  focusComposer,
   onAdvanceActivePendingUserInput,
   onChangeActivePendingUserInputCustomAnswer,
   onCodexFastModeChange,
-  onComposerDragEnter,
-  onComposerDragLeave,
-  onComposerDragOver,
-  onComposerDrop,
-  onComposerImagePreview,
   onHandleInteractionModeChange,
-  onComposerPaste,
   onEffortSelect,
   onImplementPlanInNewThread,
   onInterrupt,
@@ -233,26 +235,31 @@ export default function ThreadComposer({
   prompt,
   promptRef,
   reasoningOptions,
-  removeComposerImage,
   resolvedTheme,
   respondingRequestIds,
   respondingUserInputRequestIds,
+  removeComposerImageFromDraft,
   runtimeMode,
   searchableModelOptions,
   selectedCodexFastModeEnabled,
   selectedEffort,
   selectedModelForPickerWithCustomFallback,
   selectedProvider,
+  setExpandedImage,
   setComposerCursor,
   setComposerHighlightedItemId,
   setComposerTrigger,
   setPrompt,
+  setThreadError,
   showPlanFollowUpPrompt,
+  threadId,
   toggleInteractionMode,
   togglePlanSidebar,
   toggleRuntimeMode,
 }: ThreadComposerProps) {
+  const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const composerSelectLockRef = useRef(false);
+  const dragDepthRef = useRef(0);
   const composerMenuOpenRef = useRef(false);
   const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
@@ -353,6 +360,11 @@ export default function ThreadComposer({
     ((pathTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
       workspaceEntriesQuery.isLoading ||
       workspaceEntriesQuery.isFetching);
+
+  useEffect(() => {
+    dragDepthRef.current = 0;
+    setIsDragOverComposer(false);
+  }, [threadId]);
 
   useEffect(() => {
     if (!composerMenuOpen) {
@@ -621,6 +633,145 @@ export default function ThreadComposer({
     ],
   );
 
+  const addComposerImages = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+
+      if (pendingUserInputs.length > 0) {
+        toastManager.add({
+          type: "error",
+          title: "Attach images after answering plan questions.",
+        });
+        return;
+      }
+
+      const nextImages: ComposerImageAttachment[] = [];
+      let nextImageCount = composerImages.length;
+      let error: string | null = null;
+      for (const file of files) {
+        if (!file.type.startsWith("image/")) {
+          error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
+          continue;
+        }
+        if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+          error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
+          continue;
+        }
+        if (nextImageCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+          error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
+          break;
+        }
+
+        const previewUrl = URL.createObjectURL(file);
+        nextImages.push({
+          type: "image",
+          id: randomUUID(),
+          name: file.name || "image",
+          mimeType: file.type,
+          sizeBytes: file.size,
+          previewUrl,
+          file,
+        });
+        nextImageCount += 1;
+      }
+
+      if (nextImages.length === 1 && nextImages[0]) {
+        addComposerImage(nextImages[0]);
+      } else if (nextImages.length > 1) {
+        addComposerImagesToDraft(nextImages);
+      }
+      setThreadError(threadId, error);
+    },
+    [
+      addComposerImage,
+      addComposerImagesToDraft,
+      composerImages.length,
+      pendingUserInputs.length,
+      setThreadError,
+      threadId,
+    ],
+  );
+
+  const removeComposerImage = useCallback(
+    (imageId: string) => {
+      removeComposerImageFromDraft(imageId);
+    },
+    [removeComposerImageFromDraft],
+  );
+
+  const onPreviewComposerImage = useCallback(
+    (imageId: string) => {
+      const preview = buildExpandedImagePreview(composerImages, imageId);
+      if (!preview) return;
+      setExpandedImage(preview);
+    },
+    [composerImages, setExpandedImage],
+  );
+
+  const onComposerPaste = useCallback(
+    (event: React.ClipboardEvent<HTMLElement>) => {
+      const files = Array.from(event.clipboardData.files);
+      if (files.length === 0) {
+        return;
+      }
+      const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+      if (imageFiles.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      addComposerImages(imageFiles);
+    },
+    [addComposerImages],
+  );
+
+  const onComposerDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragOverComposer(true);
+  }, []);
+
+  const onComposerDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setIsDragOverComposer(true);
+  }, []);
+
+  const onComposerDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragOverComposer(false);
+    }
+  }, []);
+
+  const onComposerDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!event.dataTransfer.types.includes("Files")) {
+        return;
+      }
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDragOverComposer(false);
+      const files = Array.from(event.dataTransfer.files);
+      addComposerImages(files);
+      focusComposer();
+    },
+    [addComposerImages, focusComposer],
+  );
+
   return (
     <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
       <form
@@ -700,7 +851,7 @@ export default function ThreadComposer({
                           className="h-full w-full cursor-zoom-in"
                           aria-label={`Preview ${image.name}`}
                           onClick={() => {
-                            onComposerImagePreview(image.id);
+                            onPreviewComposerImage(image.id);
                           }}
                         >
                           <img
