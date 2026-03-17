@@ -78,11 +78,12 @@ import { basenameOfPath } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
 import { useActiveProject } from "../hooks/useActiveProject";
 import { useProjectScripts } from "../hooks/useProjectScripts";
+import { useChatKeyboardShortcuts } from "../hooks/useChatKeyboardShortcuts";
 import { useServerConfig } from "../hooks/useServerConfig";
 import { useTerminalActions } from "../hooks/useTerminalActions";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -104,14 +105,12 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { toastManager } from "./ui/toast";
 import {
   projectScriptRuntimeEnv,
-  projectScriptIdFromCommand,
   setupProjectScript,
 } from "~/projectScripts";
 import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { resolveAppModelSelection, useAppSettings } from "../appSettings";
-import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -1676,85 +1675,18 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     terminalOpenByThreadRef.current[activeThreadId] = current;
   }, [activeThreadId, focusComposer, setTerminalFocusRequestId, terminalState.terminalOpen]);
 
-  useEffect(() => {
-    const handler = (event: globalThis.KeyboardEvent) => {
-      if (!activeThreadId || event.defaultPrevented) return;
-      const shortcutContext = {
-        terminalFocus: isTerminalFocused(),
-        terminalOpen: Boolean(terminalState.terminalOpen),
-      };
-
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: shortcutContext,
-      });
-      if (!command) return;
-
-      if (command === "terminal.toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleTerminalVisibility();
-        return;
-      }
-
-      if (command === "terminal.split") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminal();
-        return;
-      }
-
-      if (command === "terminal.close") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) return;
-        closeTerminal(terminalState.activeTerminalId);
-        return;
-      }
-
-      if (command === "terminal.new") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        createNewTerminal();
-        return;
-      }
-
-      if (command === "diff.toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        onToggleDiff();
-        return;
-      }
-
-      const scriptId = projectScriptIdFromCommand(command);
-      if (!scriptId || !activeProject) return;
-      const script = activeProject.scripts.find((entry) => entry.id === scriptId);
-      if (!script) return;
-      event.preventDefault();
-      event.stopPropagation();
-      void runProjectScript(script);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [
+  useChatKeyboardShortcuts({
+    keybindings,
     activeProject,
-    terminalState.terminalOpen,
-    terminalState.activeTerminalId,
-    activeThreadId,
-    closeTerminal,
+    terminalState,
+    toggleTerminalVisibility,
+    splitTerminal,
     createNewTerminal,
+    closeTerminal,
     setTerminalOpen,
     runProjectScript,
-    splitTerminal,
-    keybindings,
     onToggleDiff,
-    toggleTerminalVisibility,
-  ]);
+  });
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
