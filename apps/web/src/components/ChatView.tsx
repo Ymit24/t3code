@@ -31,7 +31,6 @@ import {
   type ComposerTrigger,
   collapseExpandedComposerCursor,
   detectComposerTrigger,
-  expandCollapsedComposerCursor,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -48,12 +47,6 @@ import {
   formatElapsed,
 } from "../session-logic";
 import { isScrollContainerNearBottom } from "../chat-scroll";
-import {
-  buildPendingUserInputAnswers,
-  derivePendingUserInputProgress,
-  setPendingUserInputCustomAnswer,
-  type PendingUserInputDraftAnswer,
-} from "../pendingUserInput";
 import { useStore } from "../store";
 import {
   buildPlanImplementationThreadTitle,
@@ -122,8 +115,6 @@ const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
-const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
-
 interface ChatViewProps {
   threadId: ThreadId;
 }
@@ -226,14 +217,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
-  const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
-    ApprovalRequestId[]
-  >([]);
-  const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
-    Record<string, Record<string, PendingUserInputDraftAnswer>>
-  >({});
-  const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
-    useState<Record<string, number>>({});
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
@@ -529,38 +512,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     [threadActivities],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
-  const activePendingDraftAnswers = useMemo(
-    () =>
-      activePendingUserInput
-        ? (pendingUserInputAnswersByRequestId[activePendingUserInput.requestId] ??
-          EMPTY_PENDING_USER_INPUT_ANSWERS)
-        : EMPTY_PENDING_USER_INPUT_ANSWERS,
-    [activePendingUserInput, pendingUserInputAnswersByRequestId],
-  );
-  const activePendingQuestionIndex = activePendingUserInput
-    ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInput.requestId] ?? 0)
-    : 0;
-  const activePendingProgress = useMemo(
-    () =>
-      activePendingUserInput
-        ? derivePendingUserInputProgress(
-            activePendingUserInput.questions,
-            activePendingDraftAnswers,
-            activePendingQuestionIndex,
-          )
-        : null,
-    [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
-  );
-  const activePendingResolvedAnswers = useMemo(
-    () =>
-      activePendingUserInput
-        ? buildPendingUserInputAnswers(activePendingUserInput.questions, activePendingDraftAnswers)
-        : null,
-    [activePendingDraftAnswers, activePendingUserInput],
-  );
-  const activePendingIsResponding = activePendingUserInput
-    ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
-    : false;
   const activeProposedPlan = useMemo(() => {
     if (!latestTurnSettled) {
       return null;
@@ -580,53 +531,7 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     latestTurnSettled &&
     activeProposedPlan !== null;
   const activePendingApproval = pendingApprovals[0] ?? null;
-  const isComposerApprovalState = activePendingApproval !== null;
-  const hasComposerHeader =
-    isComposerApprovalState ||
-    pendingUserInputs.length > 0 ||
-    (showPlanFollowUpPrompt && activeProposedPlan !== null);
-  const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
-  const lastSyncedPendingInputRef = useRef<{
-    requestId: string | null;
-    questionId: string | null;
-  } | null>(null);
-  useEffect(() => {
-    const nextCustomAnswer = activePendingProgress?.customAnswer;
-    if (typeof nextCustomAnswer !== "string") {
-      lastSyncedPendingInputRef.current = null;
-      return;
-    }
-    const nextRequestId = activePendingUserInput?.requestId ?? null;
-    const nextQuestionId = activePendingProgress?.activeQuestion?.id ?? null;
-    const questionChanged =
-      lastSyncedPendingInputRef.current?.requestId !== nextRequestId ||
-      lastSyncedPendingInputRef.current?.questionId !== nextQuestionId;
-    const textChangedExternally = promptRef.current !== nextCustomAnswer;
-
-    lastSyncedPendingInputRef.current = {
-      requestId: nextRequestId,
-      questionId: nextQuestionId,
-    };
-
-    if (!questionChanged && !textChangedExternally) {
-      return;
-    }
-
-    promptRef.current = nextCustomAnswer;
-    const nextCursor = collapseExpandedComposerCursor(nextCustomAnswer, nextCustomAnswer.length);
-    setComposerCursor(nextCursor);
-    setComposerTrigger(
-      detectComposerTrigger(
-        nextCustomAnswer,
-        expandCollapsedComposerCursor(nextCustomAnswer, nextCursor),
-      ),
-    );
-    setComposerHighlightedItemId(null);
-  }, [
-    activePendingProgress?.customAnswer,
-    activePendingUserInput?.requestId,
-    activePendingProgress?.activeQuestion?.id,
-  ]);
+  const composerFooterHasWideActions = showPlanFollowUpPrompt || pendingUserInputs.length > 0;
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
@@ -1577,10 +1482,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     e?.preventDefault();
     const api = readNativeApi();
     if (!api || !activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
-    if (activePendingProgress) {
-      onAdvanceActivePendingUserInput();
-      return;
-    }
     const trimmed = prompt.trim();
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
@@ -1894,10 +1795,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     async (requestId: ApprovalRequestId, answers: Record<string, unknown>) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
-
-      setRespondingUserInputRequestIds((existing) =>
-        existing.includes(requestId) ? existing : [...existing, requestId],
-      );
       await api.orchestration
         .dispatchCommand({
           type: "thread.user-input.respond",
@@ -1913,101 +1810,9 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             err instanceof Error ? err.message : "Failed to submit user input.",
           );
         });
-      setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
     },
     [activeThreadId, setStoreThreadError],
   );
-
-  const setActivePendingUserInputQuestionIndex = useCallback(
-    (nextQuestionIndex: number) => {
-      if (!activePendingUserInput) {
-        return;
-      }
-      setPendingUserInputQuestionIndexByRequestId((existing) => ({
-        ...existing,
-        [activePendingUserInput.requestId]: nextQuestionIndex,
-      }));
-    },
-    [activePendingUserInput],
-  );
-
-  const onSelectActivePendingUserInputOption = useCallback(
-    (questionId: string, optionLabel: string) => {
-      if (!activePendingUserInput) {
-        return;
-      }
-      setPendingUserInputAnswersByRequestId((existing) => ({
-        ...existing,
-        [activePendingUserInput.requestId]: {
-          ...existing[activePendingUserInput.requestId],
-          [questionId]: {
-            selectedOptionLabel: optionLabel,
-            customAnswer: "",
-          },
-        },
-      }));
-      promptRef.current = "";
-      setComposerCursor(0);
-      setComposerTrigger(null);
-    },
-    [activePendingUserInput],
-  );
-
-  const onChangeActivePendingUserInputCustomAnswer = useCallback(
-    (
-      questionId: string,
-      value: string,
-      nextCursor: number,
-      expandedCursor: number,
-      cursorAdjacentToMention: boolean,
-    ) => {
-      if (!activePendingUserInput) {
-        return;
-      }
-      promptRef.current = value;
-      setPendingUserInputAnswersByRequestId((existing) => ({
-        ...existing,
-        [activePendingUserInput.requestId]: {
-          ...existing[activePendingUserInput.requestId],
-          [questionId]: setPendingUserInputCustomAnswer(
-            existing[activePendingUserInput.requestId]?.[questionId],
-            value,
-          ),
-        },
-      }));
-      setComposerCursor(nextCursor);
-      setComposerTrigger(
-        cursorAdjacentToMention ? null : detectComposerTrigger(value, expandedCursor),
-      );
-    },
-    [activePendingUserInput],
-  );
-
-  const onAdvanceActivePendingUserInput = useCallback(() => {
-    if (!activePendingUserInput || !activePendingProgress) {
-      return;
-    }
-    if (activePendingProgress.isLastQuestion) {
-      if (activePendingResolvedAnswers) {
-        void onRespondToUserInput(activePendingUserInput.requestId, activePendingResolvedAnswers);
-      }
-      return;
-    }
-    setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
-  }, [
-    activePendingProgress,
-    activePendingResolvedAnswers,
-    activePendingUserInput,
-    onRespondToUserInput,
-    setActivePendingUserInputQuestionIndex,
-  ]);
-
-  const onPreviousActivePendingUserInputQuestion = useCallback(() => {
-    if (!activePendingProgress) {
-      return;
-    }
-    setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
-  }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
 
   const onSubmitPlanFollowUp = useCallback(
     async ({
@@ -2407,40 +2212,13 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
           <ThreadComposer
             activePlan={activePlan}
             activePendingApproval={activePendingApproval}
-            activePendingDraftAnswers={activePendingDraftAnswers}
-            activePendingUserInput={activePendingUserInput}
-            activePendingIsResponding={activePendingIsResponding}
-            activePendingProgress={activePendingProgress}
-            activePendingQuestionIndex={activePendingQuestionIndex}
-            activePendingResolvedAnswers={activePendingResolvedAnswers}
             activeProposedPlan={activeProposedPlan}
             composerCursor={composerCursor}
-            composerDisabled={isConnecting || isComposerApprovalState}
             composerEditorRef={composerEditorRef}
             composerFormRef={composerFormRef}
             composerHighlightedItemId={composerHighlightedItemId}
             composerImages={composerImages}
-            composerPlaceholder={
-              isComposerApprovalState
-                ? (activePendingApproval?.detail ?? "Resolve this approval request to continue")
-                : activePendingProgress
-                  ? "Type your own answer, or leave this blank to use the selected option"
-                  : showPlanFollowUpPrompt && activeProposedPlan
-                    ? "Add feedback to refine the plan, or leave this blank to implement it"
-                    : phase === "disconnected"
-                      ? "Ask for follow-up changes or attach images"
-                      : "Ask anything, @tag files/folders, or use / to show available commands"
-            }
             composerTrigger={composerTrigger}
-            composerValue={
-              isComposerApprovalState
-                ? ""
-                : activePendingProgress
-                  ? activePendingProgress.customAnswer
-                  : prompt
-            }
-            hasComposerHeader={hasComposerHeader}
-            isComposerApprovalState={isComposerApprovalState}
             isComposerFooterCompact={isComposerFooterCompact}
             isConnecting={isConnecting}
             isGitRepo={isGitRepo}
@@ -2454,17 +2232,14 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             addComposerImagesToDraft={addComposerImagesToDraft}
             focusComposer={focusComposer}
             gitCwd={gitCwd}
-            onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-            onChangeActivePendingUserInputCustomAnswer={onChangeActivePendingUserInputCustomAnswer}
             onCodexFastModeChange={onCodexFastModeChange}
             onHandleInteractionModeChange={handleInteractionModeChange}
             onEffortSelect={onEffortSelect}
             onImplementPlanInNewThread={onImplementPlanInNewThread}
             onInterrupt={onInterrupt}
-            onPreviousActivePendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
             onProviderModelSelect={onProviderModelSelect}
             onRespondToApproval={onRespondToApproval}
-            onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
+            onRespondToUserInput={onRespondToUserInput}
             onSubmit={onSend}
             pendingApprovalsCount={pendingApprovals.length}
             pendingUserInputs={pendingUserInputs}
@@ -2475,7 +2250,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             reasoningOptions={reasoningOptions}
             resolvedTheme={resolvedTheme}
             respondingRequestIds={respondingRequestIds}
-            respondingUserInputRequestIds={respondingUserInputRequestIds}
             removeComposerImageFromDraft={removeComposerImageFromDraft}
             runtimeMode={runtimeMode}
             searchableModelOptions={searchableModelOptions}

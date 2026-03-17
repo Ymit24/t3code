@@ -43,8 +43,10 @@ import {
   type ComposerTrigger,
 } from "../../composer-logic";
 import {
+  buildPendingUserInputAnswers,
+  derivePendingUserInputProgress,
+  setPendingUserInputCustomAnswer,
   type PendingUserInputDraftAnswer,
-  type PendingUserInputProgress,
 } from "../../pendingUserInput";
 import { proposedPlanTitle } from "../../proposedPlan";
 import {
@@ -73,6 +75,7 @@ import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
+const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -100,25 +103,14 @@ interface ComposerSearchableModelOption {
 export interface ThreadComposerProps {
   activePlan: ActivePlanState | null;
   activePendingApproval: PendingApproval | null;
-  activePendingDraftAnswers: Record<string, PendingUserInputDraftAnswer>;
-  activePendingUserInput: PendingUserInput | null;
-  activePendingIsResponding: boolean;
-  activePendingProgress: PendingUserInputProgress | null;
-  activePendingQuestionIndex: number;
-  activePendingResolvedAnswers: Record<string, string> | null;
   activeProposedPlan: LatestProposedPlanState | null;
   composerCursor: number;
-  composerDisabled: boolean;
   composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
   composerFormRef: RefObject<HTMLFormElement | null>;
   composerHighlightedItemId: string | null;
   composerImages: ComposerImageAttachment[];
-  composerPlaceholder: string;
   composerTrigger: ComposerTrigger | null;
-  composerValue: string;
   gitCwd: string | null;
-  hasComposerHeader: boolean;
-  isComposerApprovalState: boolean;
   isComposerFooterCompact: boolean;
   isConnecting: boolean;
   isGitRepo: boolean;
@@ -131,26 +123,20 @@ export interface ThreadComposerProps {
   addComposerImage: (image: ComposerImageAttachment) => void;
   addComposerImagesToDraft: (images: ComposerImageAttachment[]) => void;
   focusComposer: () => void;
-  onAdvanceActivePendingUserInput: () => void;
-  onChangeActivePendingUserInputCustomAnswer: (
-    questionId: string,
-    value: string,
-    nextCursor: number,
-    expandedCursor: number,
-    cursorAdjacentToMention: boolean,
-  ) => void;
   onCodexFastModeChange: (enabled: boolean) => void;
   onHandleInteractionModeChange: (mode: ProviderInteractionMode) => void;
   onEffortSelect: (effort: CodexReasoningEffort) => void;
   onImplementPlanInNewThread: () => Promise<void>;
   onInterrupt: () => Promise<void>;
-  onPreviousActivePendingUserInputQuestion: () => void;
   onProviderModelSelect: ComponentProps<typeof ProviderModelPicker>["onProviderModelChange"];
   onRespondToApproval: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
   ) => Promise<void>;
-  onSelectActivePendingUserInputOption: (questionId: string, optionLabel: string) => void;
+  onRespondToUserInput: (
+    requestId: ApprovalRequestId,
+    answers: Record<string, unknown>,
+  ) => Promise<void>;
   onSubmit: (e?: { preventDefault: () => void }) => Promise<void>;
   pendingApprovalsCount: number;
   pendingUserInputs: PendingUserInput[];
@@ -161,7 +147,6 @@ export interface ThreadComposerProps {
   reasoningOptions: ComponentProps<typeof CodexTraitsPicker>["options"];
   resolvedTheme: "light" | "dark";
   respondingRequestIds: ApprovalRequestId[];
-  respondingUserInputRequestIds: ApprovalRequestId[];
   removeComposerImageFromDraft: (imageId: string) => void;
   runtimeMode: RuntimeMode;
   searchableModelOptions: ComposerSearchableModelOption[];
@@ -185,25 +170,14 @@ export interface ThreadComposerProps {
 export default function ThreadComposer({
   activePlan,
   activePendingApproval,
-  activePendingDraftAnswers,
-  activePendingUserInput,
-  activePendingIsResponding,
-  activePendingProgress,
-  activePendingQuestionIndex,
-  activePendingResolvedAnswers,
   activeProposedPlan,
   composerCursor,
-  composerDisabled,
   composerEditorRef,
   composerFormRef,
   composerHighlightedItemId,
   composerImages,
-  composerPlaceholder,
   composerTrigger,
-  composerValue,
   gitCwd,
-  hasComposerHeader,
-  isComposerApprovalState,
   isComposerFooterCompact,
   isConnecting,
   isGitRepo,
@@ -216,17 +190,14 @@ export default function ThreadComposer({
   addComposerImage,
   addComposerImagesToDraft,
   focusComposer,
-  onAdvanceActivePendingUserInput,
-  onChangeActivePendingUserInputCustomAnswer,
   onCodexFastModeChange,
   onHandleInteractionModeChange,
   onEffortSelect,
   onImplementPlanInNewThread,
   onInterrupt,
-  onPreviousActivePendingUserInputQuestion,
   onProviderModelSelect,
   onRespondToApproval,
-  onSelectActivePendingUserInputOption,
+  onRespondToUserInput,
   onSubmit,
   pendingApprovalsCount,
   pendingUserInputs,
@@ -237,7 +208,6 @@ export default function ThreadComposer({
   reasoningOptions,
   resolvedTheme,
   respondingRequestIds,
-  respondingUserInputRequestIds,
   removeComposerImageFromDraft,
   runtimeMode,
   searchableModelOptions,
@@ -258,11 +228,76 @@ export default function ThreadComposer({
   toggleRuntimeMode,
 }: ThreadComposerProps) {
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
+  const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
+    ApprovalRequestId[]
+  >([]);
+  const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
+    Record<string, Record<string, PendingUserInputDraftAnswer>>
+  >({});
+  const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
+    useState<Record<string, number>>({});
   const composerSelectLockRef = useRef(false);
   const dragDepthRef = useRef(0);
+  const lastSyncedPendingInputRef = useRef<{
+    requestId: string | null;
+    questionId: string | null;
+  } | null>(null);
   const composerMenuOpenRef = useRef(false);
   const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
+  const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const activePendingDraftAnswers = useMemo(
+    () =>
+      activePendingUserInput
+        ? (pendingUserInputAnswersByRequestId[activePendingUserInput.requestId] ??
+          EMPTY_PENDING_USER_INPUT_ANSWERS)
+        : EMPTY_PENDING_USER_INPUT_ANSWERS,
+    [activePendingUserInput, pendingUserInputAnswersByRequestId],
+  );
+  const activePendingQuestionIndex = activePendingUserInput
+    ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInput.requestId] ?? 0)
+    : 0;
+  const activePendingProgress = useMemo(
+    () =>
+      activePendingUserInput
+        ? derivePendingUserInputProgress(
+            activePendingUserInput.questions,
+            activePendingDraftAnswers,
+            activePendingQuestionIndex,
+          )
+        : null,
+    [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
+  );
+  const activePendingResolvedAnswers = useMemo(
+    () =>
+      activePendingUserInput
+        ? buildPendingUserInputAnswers(activePendingUserInput.questions, activePendingDraftAnswers)
+        : null,
+    [activePendingDraftAnswers, activePendingUserInput],
+  );
+  const activePendingIsResponding = activePendingUserInput
+    ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
+    : false;
+  const isComposerApprovalState = activePendingApproval !== null;
+  const hasComposerHeader =
+    isComposerApprovalState ||
+    pendingUserInputs.length > 0 ||
+    (showPlanFollowUpPrompt && activeProposedPlan !== null);
+  const composerDisabled = isConnecting || isComposerApprovalState;
+  const composerPlaceholder = isComposerApprovalState
+    ? (activePendingApproval?.detail ?? "Resolve this approval request to continue")
+    : activePendingProgress
+      ? "Type your own answer, or leave this blank to use the selected option"
+      : showPlanFollowUpPrompt && activeProposedPlan
+        ? "Add feedback to refine the plan, or leave this blank to implement it"
+        : phase === "disconnected"
+          ? "Ask for follow-up changes or attach images"
+          : "Ask anything, @tag files/folders, or use / to show available commands";
+  const composerValue = isComposerApprovalState
+    ? ""
+    : activePendingProgress
+      ? activePendingProgress.customAnswer
+      : prompt;
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const isPathTrigger = composerTriggerKind === "path";
@@ -365,6 +400,160 @@ export default function ThreadComposer({
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
   }, [threadId]);
+
+  useEffect(() => {
+    const nextCustomAnswer = activePendingProgress?.customAnswer;
+    if (typeof nextCustomAnswer !== "string") {
+      lastSyncedPendingInputRef.current = null;
+      return;
+    }
+    const nextRequestId = activePendingUserInput?.requestId ?? null;
+    const nextQuestionId = activePendingProgress?.activeQuestion?.id ?? null;
+    const questionChanged =
+      lastSyncedPendingInputRef.current?.requestId !== nextRequestId ||
+      lastSyncedPendingInputRef.current?.questionId !== nextQuestionId;
+    const textChangedExternally = promptRef.current !== nextCustomAnswer;
+
+    lastSyncedPendingInputRef.current = {
+      requestId: nextRequestId,
+      questionId: nextQuestionId,
+    };
+
+    if (!questionChanged && !textChangedExternally) {
+      return;
+    }
+
+    promptRef.current = nextCustomAnswer;
+    const nextCursor = collapseExpandedComposerCursor(nextCustomAnswer, nextCustomAnswer.length);
+    setComposerCursor(nextCursor);
+    setComposerTrigger(
+      detectComposerTrigger(
+        nextCustomAnswer,
+        expandCollapsedComposerCursor(nextCustomAnswer, nextCursor),
+      ),
+    );
+    setComposerHighlightedItemId(null);
+  }, [
+    activePendingProgress?.activeQuestion?.id,
+    activePendingProgress?.customAnswer,
+    activePendingUserInput?.requestId,
+    promptRef,
+    setComposerCursor,
+    setComposerHighlightedItemId,
+    setComposerTrigger,
+  ]);
+
+  const onChangeActivePendingUserInputCustomAnswer = useCallback(
+    (
+      questionId: string,
+      value: string,
+      nextCursor: number,
+      expandedCursor: number,
+      cursorAdjacentToMention: boolean,
+    ) => {
+      if (!activePendingUserInput) {
+        return;
+      }
+      promptRef.current = value;
+      setPendingUserInputAnswersByRequestId((existing) => ({
+        ...existing,
+        [activePendingUserInput.requestId]: {
+          ...existing[activePendingUserInput.requestId],
+          [questionId]: setPendingUserInputCustomAnswer(
+            existing[activePendingUserInput.requestId]?.[questionId],
+            value,
+          ),
+        },
+      }));
+      setComposerCursor(nextCursor);
+      setComposerTrigger(
+        cursorAdjacentToMention ? null : detectComposerTrigger(value, expandedCursor),
+      );
+    },
+    [activePendingUserInput, promptRef, setComposerCursor, setComposerTrigger],
+  );
+
+  const setActivePendingUserInputQuestionIndex = useCallback(
+    (nextQuestionIndex: number) => {
+      if (!activePendingUserInput) {
+        return;
+      }
+      setPendingUserInputQuestionIndexByRequestId((existing) => ({
+        ...existing,
+        [activePendingUserInput.requestId]: nextQuestionIndex,
+      }));
+    },
+    [activePendingUserInput],
+  );
+
+  const onSelectActivePendingUserInputOption = useCallback(
+    (questionId: string, optionLabel: string) => {
+      if (!activePendingUserInput) {
+        return;
+      }
+      setPendingUserInputAnswersByRequestId((existing) => ({
+        ...existing,
+        [activePendingUserInput.requestId]: {
+          ...existing[activePendingUserInput.requestId],
+          [questionId]: {
+            selectedOptionLabel: optionLabel,
+            customAnswer: "",
+          },
+        },
+      }));
+      promptRef.current = "";
+      setComposerCursor(0);
+      setComposerTrigger(null);
+    },
+    [activePendingUserInput, promptRef, setComposerCursor, setComposerTrigger],
+  );
+
+  const onAdvanceActivePendingUserInput = useCallback(async () => {
+    if (!activePendingUserInput || !activePendingProgress) {
+      return;
+    }
+    if (activePendingProgress.isLastQuestion) {
+      if (!activePendingResolvedAnswers) {
+        return;
+      }
+      const requestId = activePendingUserInput.requestId;
+      setRespondingUserInputRequestIds((existing) =>
+        existing.includes(requestId) ? existing : [...existing, requestId],
+      );
+      try {
+        await onRespondToUserInput(requestId, activePendingResolvedAnswers);
+      } finally {
+        setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+      }
+      return;
+    }
+    setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
+  }, [
+    activePendingProgress,
+    activePendingResolvedAnswers,
+    activePendingUserInput,
+    onRespondToUserInput,
+    setActivePendingUserInputQuestionIndex,
+  ]);
+
+  const onPreviousActivePendingUserInputQuestion = useCallback(() => {
+    if (!activePendingProgress) {
+      return;
+    }
+    setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
+  }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
+
+  const handleSubmit = useCallback(
+    async (event?: { preventDefault: () => void }) => {
+      event?.preventDefault();
+      if (activePendingProgress) {
+        await onAdvanceActivePendingUserInput();
+        return;
+      }
+      await onSubmit();
+    },
+    [activePendingProgress, onAdvanceActivePendingUserInput, onSubmit],
+  );
 
   useEffect(() => {
     if (!composerMenuOpen) {
@@ -619,15 +808,15 @@ export default function ThreadComposer({
       }
 
       if (key === "Enter" && !event.shiftKey) {
-        void onSubmit();
+        void handleSubmit();
         return true;
       }
       return false;
     },
     [
+      handleSubmit,
       nudgeComposerMenuHighlight,
       onSelectComposerItem,
-      onSubmit,
       resolveActiveComposerTrigger,
       toggleInteractionMode,
     ],
@@ -776,7 +965,7 @@ export default function ThreadComposer({
     <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
       <form
         ref={composerFormRef}
-        onSubmit={onSubmit}
+        onSubmit={handleSubmit}
         className="mx-auto w-full min-w-0 max-w-3xl"
         data-chat-composer-form="true"
       >
