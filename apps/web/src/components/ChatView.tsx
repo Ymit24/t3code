@@ -25,7 +25,9 @@ import {
 } from "@t3tools/shared/model";
 import {
   type ComponentProps,
+  type Dispatch,
   type RefObject,
+  type SetStateAction,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -329,10 +331,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
   const composerFormRef = useRef<HTMLFormElement>(null);
   const composerFormHeightRef = useRef(0);
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
-  const composerSelectLockRef = useRef(false);
-  const composerMenuOpenRef = useRef(false);
-  const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
-  const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
@@ -900,100 +898,8 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     timelineEntries,
   ]);
   const gitCwd = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
-  const composerTriggerKind = composerTrigger?.kind ?? null;
-  const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
-  const isPathTrigger = composerTriggerKind === "path";
-  const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
-    pathTriggerQuery,
-    { wait: COMPOSER_PATH_QUERY_DEBOUNCE_MS },
-    (debouncerState) => ({ isPending: debouncerState.isPending }),
-  );
-  const effectivePathQuery = pathTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
   const { keybindings, providerStatuses } = useServerConfig();
-  const workspaceEntriesQuery = useQuery(
-    projectSearchEntriesQueryOptions({
-      cwd: gitCwd,
-      query: effectivePathQuery,
-      enabled: isPathTrigger,
-      limit: 80,
-    }),
-  );
-  const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
-  const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
-    if (!composerTrigger) return [];
-    if (composerTrigger.kind === "path") {
-      return workspaceEntries.map((entry) => ({
-        id: `path:${entry.kind}:${entry.path}`,
-        type: "path",
-        path: entry.path,
-        pathKind: entry.kind,
-        label: basenameOfPath(entry.path),
-        description: entry.parentPath ?? "",
-      }));
-    }
-
-    if (composerTrigger.kind === "slash-command") {
-      const slashCommandItems = [
-        {
-          id: "slash:model",
-          type: "slash-command",
-          command: "model",
-          label: "/model",
-          description: "Switch response model for this thread",
-        },
-        {
-          id: "slash:plan",
-          type: "slash-command",
-          command: "plan",
-          label: "/plan",
-          description: "Switch this thread into plan mode",
-        },
-        {
-          id: "slash:default",
-          type: "slash-command",
-          command: "default",
-          label: "/default",
-          description: "Switch this thread back to normal chat mode",
-        },
-      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const query = composerTrigger.query.trim().toLowerCase();
-      if (!query) {
-        return [...slashCommandItems];
-      }
-      return slashCommandItems.filter(
-        (item) => item.command.includes(query) || item.label.slice(1).includes(query),
-      );
-    }
-
-    return searchableModelOptions
-      .filter(({ searchSlug, searchName, searchProvider }) => {
-        const query = composerTrigger.query.trim().toLowerCase();
-        if (!query) return true;
-        return (
-          searchSlug.includes(query) || searchName.includes(query) || searchProvider.includes(query)
-        );
-      })
-      .map(({ provider, providerLabel, slug, name }) => ({
-        id: `model:${provider}:${slug}`,
-        type: "model",
-        provider,
-        model: slug,
-        label: name,
-        description: `${providerLabel} · ${slug}`,
-      }));
-  }, [composerTrigger, searchableModelOptions, workspaceEntries]);
-  const composerMenuOpen = Boolean(composerTrigger);
-  const activeComposerMenuItem = useMemo(
-    () =>
-      composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
-      composerMenuItems[0] ??
-      null,
-    [composerHighlightedItemId, composerMenuItems],
-  );
-  composerMenuOpenRef.current = composerMenuOpen;
-  composerMenuItemsRef.current = composerMenuItems;
-  activeComposerMenuItemRef.current = activeComposerMenuItem;
   const nonPersistedComposerImageIdSet = useMemo(
     () => new Set(nonPersistedComposerImageIds),
     [nonPersistedComposerImageIds],
@@ -1422,18 +1328,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     }
     planSidebarDismissedForTurnRef.current = null;
   }, [activeThread?.id]);
-
-  useEffect(() => {
-    if (!composerMenuOpen) {
-      setComposerHighlightedItemId(null);
-      return;
-    }
-    setComposerHighlightedItemId((existing) =>
-      existing && composerMenuItems.some((item) => item.id === existing)
-        ? existing
-        : (composerMenuItems[0]?.id ?? null),
-    );
-  }, [composerMenuItems, composerMenuOpen]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);
@@ -2583,245 +2477,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
     [isLocalDraftThread, scheduleComposerFocus, setDraftThreadContext, threadId],
   );
 
-  const applyPromptReplacement = useCallback(
-    (
-      rangeStart: number,
-      rangeEnd: number,
-      replacement: string,
-      options?: { expectedText?: string },
-    ): boolean => {
-      const currentText = promptRef.current;
-      const safeStart = Math.max(0, Math.min(currentText.length, rangeStart));
-      const safeEnd = Math.max(safeStart, Math.min(currentText.length, rangeEnd));
-      if (
-        options?.expectedText !== undefined &&
-        currentText.slice(safeStart, safeEnd) !== options.expectedText
-      ) {
-        return false;
-      }
-      const next = replaceTextRange(promptRef.current, rangeStart, rangeEnd, replacement);
-      const nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
-      promptRef.current = next.text;
-      const activePendingQuestion = activePendingProgress?.activeQuestion;
-      if (activePendingQuestion && activePendingUserInput) {
-        setPendingUserInputAnswersByRequestId((existing) => ({
-          ...existing,
-          [activePendingUserInput.requestId]: {
-            ...existing[activePendingUserInput.requestId],
-            [activePendingQuestion.id]: setPendingUserInputCustomAnswer(
-              existing[activePendingUserInput.requestId]?.[activePendingQuestion.id],
-              next.text,
-            ),
-          },
-        }));
-      } else {
-        setPrompt(next.text);
-      }
-      setComposerCursor(nextCursor);
-      setComposerTrigger(
-        detectComposerTrigger(next.text, expandCollapsedComposerCursor(next.text, nextCursor)),
-      );
-      window.requestAnimationFrame(() => {
-        composerEditorRef.current?.focusAt(nextCursor);
-      });
-      return true;
-    },
-    [activePendingProgress?.activeQuestion, activePendingUserInput, setPrompt],
-  );
-
-  const readComposerSnapshot = useCallback((): {
-    value: string;
-    cursor: number;
-    expandedCursor: number;
-  } => {
-    const editorSnapshot = composerEditorRef.current?.readSnapshot();
-    if (editorSnapshot) {
-      return editorSnapshot;
-    }
-    return {
-      value: promptRef.current,
-      cursor: composerCursor,
-      expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
-    };
-  }, [composerCursor]);
-
-  const resolveActiveComposerTrigger = useCallback((): {
-    snapshot: { value: string; cursor: number; expandedCursor: number };
-    trigger: ComposerTrigger | null;
-  } => {
-    const snapshot = readComposerSnapshot();
-    return {
-      snapshot,
-      trigger: detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
-    };
-  }, [readComposerSnapshot]);
-
-  const onSelectComposerItem = useCallback(
-    (item: ComposerCommandItem) => {
-      if (composerSelectLockRef.current) return;
-      composerSelectLockRef.current = true;
-      window.requestAnimationFrame(() => {
-        composerSelectLockRef.current = false;
-      });
-      const { snapshot, trigger } = resolveActiveComposerTrigger();
-      if (!trigger) return;
-      if (item.type === "path") {
-        const replacement = `@${item.path} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied) {
-          setComposerHighlightedItemId(null);
-        }
-        return;
-      }
-      if (item.type === "slash-command") {
-        if (item.command === "model") {
-          const replacement = "/model ";
-          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-            snapshot.value,
-            trigger.rangeEnd,
-            replacement,
-          );
-          const applied = applyPromptReplacement(
-            trigger.rangeStart,
-            replacementRangeEnd,
-            replacement,
-            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-          );
-          if (applied) {
-            setComposerHighlightedItemId(null);
-          }
-          return;
-        }
-        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-        });
-        if (applied) {
-          setComposerHighlightedItemId(null);
-        }
-        return;
-      }
-      onProviderModelSelect(item.provider, item.model);
-      const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-      });
-      if (applied) {
-        setComposerHighlightedItemId(null);
-      }
-    },
-    [
-      applyPromptReplacement,
-      handleInteractionModeChange,
-      onProviderModelSelect,
-      resolveActiveComposerTrigger,
-    ],
-  );
-  const onComposerMenuItemHighlighted = useCallback((itemId: string | null) => {
-    setComposerHighlightedItemId(itemId);
-  }, []);
-  const nudgeComposerMenuHighlight = useCallback(
-    (key: "ArrowDown" | "ArrowUp") => {
-      if (composerMenuItems.length === 0) {
-        return;
-      }
-      const highlightedIndex = composerMenuItems.findIndex(
-        (item) => item.id === composerHighlightedItemId,
-      );
-      const normalizedIndex =
-        highlightedIndex >= 0 ? highlightedIndex : key === "ArrowDown" ? -1 : 0;
-      const offset = key === "ArrowDown" ? 1 : -1;
-      const nextIndex =
-        (normalizedIndex + offset + composerMenuItems.length) % composerMenuItems.length;
-      const nextItem = composerMenuItems[nextIndex];
-      setComposerHighlightedItemId(nextItem?.id ?? null);
-    },
-    [composerHighlightedItemId, composerMenuItems],
-  );
-  const isComposerMenuLoading =
-    composerTriggerKind === "path" &&
-    ((pathTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
-      workspaceEntriesQuery.isLoading ||
-      workspaceEntriesQuery.isFetching);
-
-  const onPromptChange = useCallback(
-    (
-      nextPrompt: string,
-      nextCursor: number,
-      expandedCursor: number,
-      cursorAdjacentToMention: boolean,
-    ) => {
-      if (activePendingProgress?.activeQuestion && activePendingUserInput) {
-        onChangeActivePendingUserInputCustomAnswer(
-          activePendingProgress.activeQuestion.id,
-          nextPrompt,
-          nextCursor,
-          expandedCursor,
-          cursorAdjacentToMention,
-        );
-        return;
-      }
-      promptRef.current = nextPrompt;
-      setPrompt(nextPrompt);
-      setComposerCursor(nextCursor);
-      setComposerTrigger(
-        cursorAdjacentToMention ? null : detectComposerTrigger(nextPrompt, expandedCursor),
-      );
-    },
-    [
-      activePendingProgress?.activeQuestion,
-      activePendingUserInput,
-      onChangeActivePendingUserInputCustomAnswer,
-      setPrompt,
-    ],
-  );
-
-  const onComposerCommandKey = (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-    event: KeyboardEvent,
-  ) => {
-    if (key === "Tab" && event.shiftKey) {
-      toggleInteractionMode();
-      return true;
-    }
-
-    const { trigger } = resolveActiveComposerTrigger();
-    const menuIsActive = composerMenuOpenRef.current || trigger !== null;
-
-    if (menuIsActive) {
-      const currentItems = composerMenuItemsRef.current;
-      if (key === "ArrowDown" && currentItems.length > 0) {
-        nudgeComposerMenuHighlight("ArrowDown");
-        return true;
-      }
-      if (key === "ArrowUp" && currentItems.length > 0) {
-        nudgeComposerMenuHighlight("ArrowUp");
-        return true;
-      }
-      if (key === "Tab" || key === "Enter") {
-        const selectedItem = activeComposerMenuItemRef.current ?? currentItems[0];
-        if (selectedItem) {
-          onSelectComposerItem(selectedItem);
-          return true;
-        }
-      }
-    }
-
-    if (key === "Enter" && !event.shiftKey) {
-      void onSend();
-      return true;
-    }
-    return false;
-  };
   const onToggleWorkGroup = useCallback((groupId: string) => {
     setExpandedWorkGroups((existing) => ({
       ...existing,
@@ -2934,19 +2589,18 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             activePlan={activePlan}
             activePendingApproval={activePendingApproval}
             activePendingDraftAnswers={activePendingDraftAnswers}
+            activePendingUserInput={activePendingUserInput}
             activePendingIsResponding={activePendingIsResponding}
             activePendingProgress={activePendingProgress}
             activePendingQuestionIndex={activePendingQuestionIndex}
             activePendingResolvedAnswers={activePendingResolvedAnswers}
             activeProposedPlan={activeProposedPlan}
-            activeComposerMenuItemId={activeComposerMenuItem?.id ?? null}
             composerCursor={composerCursor}
             composerDisabled={isConnecting || isComposerApprovalState}
             composerEditorRef={composerEditorRef}
             composerFormRef={composerFormRef}
+            composerHighlightedItemId={composerHighlightedItemId}
             composerImages={composerImages}
-            composerMenuItems={composerMenuItems}
-            composerMenuOpen={composerMenuOpen}
             composerPlaceholder={
               isComposerApprovalState
                 ? (activePendingApproval?.detail ?? "Resolve this approval request to continue")
@@ -2958,7 +2612,7 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
                       ? "Ask for follow-up changes or attach images"
                       : "Ask anything, @tag files/folders, or use / to show available commands"
             }
-            composerTriggerKind={composerTriggerKind}
+            composerTrigger={composerTrigger}
             composerValue={
               isComposerApprovalState
                 ? ""
@@ -2969,7 +2623,6 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             hasComposerHeader={hasComposerHeader}
             isComposerApprovalState={isComposerApprovalState}
             isComposerFooterCompact={isComposerFooterCompact}
-            isComposerMenuLoading={isComposerMenuLoading}
             isConnecting={isConnecting}
             isDragOverComposer={isDragOverComposer}
             isGitRepo={isGitRepo}
@@ -2979,41 +2632,46 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
             lockedProvider={lockedProvider}
             modelOptionsByProvider={modelOptionsByProvider}
             nonPersistedComposerImageIdSet={nonPersistedComposerImageIdSet}
+            gitCwd={gitCwd}
             onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+            onChangeActivePendingUserInputCustomAnswer={onChangeActivePendingUserInputCustomAnswer}
             onCodexFastModeChange={onCodexFastModeChange}
-            onComposerCommandKey={onComposerCommandKey}
             onComposerDragEnter={onComposerDragEnter}
             onComposerDragLeave={onComposerDragLeave}
             onComposerDragOver={onComposerDragOver}
             onComposerDrop={onComposerDrop}
             onComposerImagePreview={onPreviewComposerImage}
-            onComposerMenuItemHighlighted={onComposerMenuItemHighlighted}
+            onHandleInteractionModeChange={handleInteractionModeChange}
             onComposerPaste={onComposerPaste}
             onEffortSelect={onEffortSelect}
             onImplementPlanInNewThread={onImplementPlanInNewThread}
             onInterrupt={onInterrupt}
             onPreviousActivePendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
-            onPromptChange={onPromptChange}
             onProviderModelSelect={onProviderModelSelect}
             onRespondToApproval={onRespondToApproval}
             onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
-            onSelectComposerItem={onSelectComposerItem}
             onSubmit={onSend}
             pendingApprovalsCount={pendingApprovals.length}
             pendingUserInputs={pendingUserInputs}
             phase={phase}
             planSidebarOpen={planSidebarOpen}
             prompt={prompt}
+            promptRef={promptRef}
             reasoningOptions={reasoningOptions}
             removeComposerImage={removeComposerImage}
             resolvedTheme={resolvedTheme}
             respondingRequestIds={respondingRequestIds}
             respondingUserInputRequestIds={respondingUserInputRequestIds}
             runtimeMode={runtimeMode}
+            searchableModelOptions={searchableModelOptions}
             selectedCodexFastModeEnabled={selectedCodexFastModeEnabled}
             selectedEffort={selectedEffort}
             selectedModelForPickerWithCustomFallback={selectedModelForPickerWithCustomFallback}
             selectedProvider={selectedProvider}
+            setComposerCursor={setComposerCursor}
+            setComposerHighlightedItemId={setComposerHighlightedItemId}
+            setComposerTrigger={setComposerTrigger}
+            setPrompt={setPrompt}
             showPlanFollowUpPrompt={showPlanFollowUpPrompt}
             toggleInteractionMode={toggleInteractionMode}
             togglePlanSidebar={togglePlanSidebar}
@@ -3168,30 +2826,39 @@ function ChatViewContent({ threadId, activeThread }: ChatViewContentProps) {
   );
 }
 
+interface ComposerSearchableModelOption {
+  provider: ProviderKind;
+  providerLabel: string;
+  slug: ModelSlug;
+  name: string;
+  searchSlug: string;
+  searchName: string;
+  searchProvider: string;
+}
+
 interface ThreadComposerProps {
   activePlan: ActivePlanState | null;
   activePendingApproval: PendingApproval | null;
   activePendingDraftAnswers: Record<string, PendingUserInputDraftAnswer>;
+  activePendingUserInput: PendingUserInput | null;
   activePendingIsResponding: boolean;
   activePendingProgress: PendingUserInputProgress | null;
   activePendingQuestionIndex: number;
   activePendingResolvedAnswers: Record<string, string> | null;
   activeProposedPlan: LatestProposedPlanState | null;
-  activeComposerMenuItemId: string | null;
   composerCursor: number;
   composerDisabled: boolean;
   composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
   composerFormRef: RefObject<HTMLFormElement | null>;
+  composerHighlightedItemId: string | null;
   composerImages: ComposerImageAttachment[];
-  composerMenuItems: ComposerCommandItem[];
-  composerMenuOpen: boolean;
   composerPlaceholder: string;
-  composerTriggerKind: ComponentProps<typeof ComposerCommandMenu>["triggerKind"];
+  composerTrigger: ComposerTrigger | null;
   composerValue: string;
+  gitCwd: string | null;
   hasComposerHeader: boolean;
   isComposerApprovalState: boolean;
   isComposerFooterCompact: boolean;
-  isComposerMenuLoading: boolean;
   isConnecting: boolean;
   isDragOverComposer: boolean;
   isGitRepo: boolean;
@@ -3202,45 +2869,53 @@ interface ThreadComposerProps {
   modelOptionsByProvider: ComponentProps<typeof ProviderModelPicker>["modelOptionsByProvider"];
   nonPersistedComposerImageIdSet: ReadonlySet<string>;
   onAdvanceActivePendingUserInput: () => void;
+  onChangeActivePendingUserInputCustomAnswer: (
+    questionId: string,
+    value: string,
+    nextCursor: number,
+    expandedCursor: number,
+    cursorAdjacentToMention: boolean,
+  ) => void;
   onCodexFastModeChange: (enabled: boolean) => void;
-  onComposerCommandKey: NonNullable<
-    ComponentProps<typeof ComposerPromptEditor>["onCommandKeyDown"]
-  >;
   onComposerDragEnter: ComponentProps<"div">["onDragEnter"];
   onComposerDragLeave: ComponentProps<"div">["onDragLeave"];
   onComposerDragOver: ComponentProps<"div">["onDragOver"];
   onComposerDrop: ComponentProps<"div">["onDrop"];
   onComposerImagePreview: (imageId: string) => void;
-  onComposerMenuItemHighlighted: (itemId: string | null) => void;
+  onHandleInteractionModeChange: (mode: ProviderInteractionMode) => void;
   onComposerPaste: ComponentProps<typeof ComposerPromptEditor>["onPaste"];
   onEffortSelect: (effort: CodexReasoningEffort) => void;
   onImplementPlanInNewThread: () => Promise<void>;
   onInterrupt: () => Promise<void>;
   onPreviousActivePendingUserInputQuestion: () => void;
-  onPromptChange: ComponentProps<typeof ComposerPromptEditor>["onChange"];
   onProviderModelSelect: ComponentProps<typeof ProviderModelPicker>["onProviderModelChange"];
   onRespondToApproval: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
   ) => Promise<void>;
   onSelectActivePendingUserInputOption: (questionId: string, optionLabel: string) => void;
-  onSelectComposerItem: (item: ComposerCommandItem) => void;
   onSubmit: (e?: { preventDefault: () => void }) => Promise<void>;
   pendingApprovalsCount: number;
   pendingUserInputs: PendingUserInput[];
   phase: SessionPhase;
   planSidebarOpen: boolean;
   prompt: string;
+  promptRef: RefObject<string>;
   reasoningOptions: ComponentProps<typeof CodexTraitsPicker>["options"];
   removeComposerImage: (imageId: string) => void;
   resolvedTheme: "light" | "dark";
   respondingRequestIds: ApprovalRequestId[];
   respondingUserInputRequestIds: ApprovalRequestId[];
   runtimeMode: RuntimeMode;
+  searchableModelOptions: ComposerSearchableModelOption[];
   selectedCodexFastModeEnabled: boolean;
   selectedEffort: CodexReasoningEffort | null;
   selectedModelForPickerWithCustomFallback: ComponentProps<typeof ProviderModelPicker>["model"];
   selectedProvider: ProviderKind;
+  setComposerCursor: Dispatch<SetStateAction<number>>;
+  setComposerHighlightedItemId: Dispatch<SetStateAction<string | null>>;
+  setComposerTrigger: Dispatch<SetStateAction<ComposerTrigger | null>>;
+  setPrompt: (nextPrompt: string) => void;
   showPlanFollowUpPrompt: boolean;
   toggleInteractionMode: () => void;
   togglePlanSidebar: () => void;
@@ -3251,26 +2926,25 @@ function ThreadComposer({
   activePlan,
   activePendingApproval,
   activePendingDraftAnswers,
+  activePendingUserInput,
   activePendingIsResponding,
   activePendingProgress,
   activePendingQuestionIndex,
   activePendingResolvedAnswers,
   activeProposedPlan,
-  activeComposerMenuItemId,
   composerCursor,
   composerDisabled,
   composerEditorRef,
   composerFormRef,
+  composerHighlightedItemId,
   composerImages,
-  composerMenuItems,
-  composerMenuOpen,
   composerPlaceholder,
-  composerTriggerKind,
+  composerTrigger,
   composerValue,
+  gitCwd,
   hasComposerHeader,
   isComposerApprovalState,
   isComposerFooterCompact,
-  isComposerMenuLoading,
   isConnecting,
   isDragOverComposer,
   isGitRepo,
@@ -3281,45 +2955,418 @@ function ThreadComposer({
   modelOptionsByProvider,
   nonPersistedComposerImageIdSet,
   onAdvanceActivePendingUserInput,
+  onChangeActivePendingUserInputCustomAnswer,
   onCodexFastModeChange,
-  onComposerCommandKey,
   onComposerDragEnter,
   onComposerDragLeave,
   onComposerDragOver,
   onComposerDrop,
   onComposerImagePreview,
-  onComposerMenuItemHighlighted,
+  onHandleInteractionModeChange,
   onComposerPaste,
   onEffortSelect,
   onImplementPlanInNewThread,
   onInterrupt,
   onPreviousActivePendingUserInputQuestion,
-  onPromptChange,
   onProviderModelSelect,
   onRespondToApproval,
   onSelectActivePendingUserInputOption,
-  onSelectComposerItem,
   onSubmit,
   pendingApprovalsCount,
   pendingUserInputs,
   phase,
   planSidebarOpen,
   prompt,
+  promptRef,
   reasoningOptions,
   removeComposerImage,
   resolvedTheme,
   respondingRequestIds,
   respondingUserInputRequestIds,
   runtimeMode,
+  searchableModelOptions,
   selectedCodexFastModeEnabled,
   selectedEffort,
   selectedModelForPickerWithCustomFallback,
   selectedProvider,
+  setComposerCursor,
+  setComposerHighlightedItemId,
+  setComposerTrigger,
+  setPrompt,
   showPlanFollowUpPrompt,
   toggleInteractionMode,
   togglePlanSidebar,
   toggleRuntimeMode,
 }: ThreadComposerProps) {
+  const composerSelectLockRef = useRef(false);
+  const composerMenuOpenRef = useRef(false);
+  const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
+  const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
+  const composerTriggerKind = composerTrigger?.kind ?? null;
+  const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
+  const isPathTrigger = composerTriggerKind === "path";
+  const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
+    pathTriggerQuery,
+    { wait: COMPOSER_PATH_QUERY_DEBOUNCE_MS },
+    (debouncerState) => ({ isPending: debouncerState.isPending }),
+  );
+  const effectivePathQuery = pathTriggerQuery.length > 0 ? debouncedPathQuery : "";
+  const workspaceEntriesQuery = useQuery(
+    projectSearchEntriesQueryOptions({
+      cwd: gitCwd,
+      query: effectivePathQuery,
+      enabled: isPathTrigger,
+      limit: 80,
+    }),
+  );
+  const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
+  const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
+    if (!composerTrigger) return [];
+    if (composerTrigger.kind === "path") {
+      return workspaceEntries.map((entry) => ({
+        id: `path:${entry.kind}:${entry.path}`,
+        type: "path",
+        path: entry.path,
+        pathKind: entry.kind,
+        label: basenameOfPath(entry.path),
+        description: entry.parentPath ?? "",
+      }));
+    }
+
+    if (composerTrigger.kind === "slash-command") {
+      const slashCommandItems = [
+        {
+          id: "slash:model",
+          type: "slash-command",
+          command: "model",
+          label: "/model",
+          description: "Switch response model for this thread",
+        },
+        {
+          id: "slash:plan",
+          type: "slash-command",
+          command: "plan",
+          label: "/plan",
+          description: "Switch this thread into plan mode",
+        },
+        {
+          id: "slash:default",
+          type: "slash-command",
+          command: "default",
+          label: "/default",
+          description: "Switch this thread back to normal chat mode",
+        },
+      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+      const query = composerTrigger.query.trim().toLowerCase();
+      if (!query) {
+        return [...slashCommandItems];
+      }
+      return slashCommandItems.filter(
+        (item) => item.command.includes(query) || item.label.slice(1).includes(query),
+      );
+    }
+
+    return searchableModelOptions
+      .filter(({ searchSlug, searchName, searchProvider }) => {
+        const query = composerTrigger.query.trim().toLowerCase();
+        if (!query) return true;
+        return (
+          searchSlug.includes(query) || searchName.includes(query) || searchProvider.includes(query)
+        );
+      })
+      .map(({ provider, providerLabel, slug, name }) => ({
+        id: `model:${provider}:${slug}`,
+        type: "model",
+        provider,
+        model: slug,
+        label: name,
+        description: `${providerLabel} · ${slug}`,
+      }));
+  }, [composerTrigger, searchableModelOptions, workspaceEntries]);
+  const composerMenuOpen = Boolean(composerTrigger);
+  const activeComposerMenuItem = useMemo(
+    () =>
+      composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
+      composerMenuItems[0] ??
+      null,
+    [composerHighlightedItemId, composerMenuItems],
+  );
+  composerMenuOpenRef.current = composerMenuOpen;
+  composerMenuItemsRef.current = composerMenuItems;
+  activeComposerMenuItemRef.current = activeComposerMenuItem;
+  const isComposerMenuLoading =
+    composerTriggerKind === "path" &&
+    ((pathTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
+      workspaceEntriesQuery.isLoading ||
+      workspaceEntriesQuery.isFetching);
+
+  useEffect(() => {
+    if (!composerMenuOpen) {
+      setComposerHighlightedItemId(null);
+      return;
+    }
+    setComposerHighlightedItemId((existing) =>
+      existing && composerMenuItems.some((item) => item.id === existing)
+        ? existing
+        : (composerMenuItems[0]?.id ?? null),
+    );
+  }, [composerMenuItems, composerMenuOpen, setComposerHighlightedItemId]);
+
+  const applyPromptReplacement = useCallback(
+    (
+      rangeStart: number,
+      rangeEnd: number,
+      replacement: string,
+      options?: { expectedText?: string },
+    ): boolean => {
+      const currentText = promptRef.current;
+      const safeStart = Math.max(0, Math.min(currentText.length, rangeStart));
+      const safeEnd = Math.max(safeStart, Math.min(currentText.length, rangeEnd));
+      if (
+        options?.expectedText !== undefined &&
+        currentText.slice(safeStart, safeEnd) !== options.expectedText
+      ) {
+        return false;
+      }
+      const next = replaceTextRange(promptRef.current, rangeStart, rangeEnd, replacement);
+      const nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
+      const nextExpandedCursor = expandCollapsedComposerCursor(next.text, nextCursor);
+      promptRef.current = next.text;
+      const activePendingQuestion = activePendingProgress?.activeQuestion;
+      if (activePendingQuestion && activePendingUserInput) {
+        onChangeActivePendingUserInputCustomAnswer(
+          activePendingQuestion.id,
+          next.text,
+          nextCursor,
+          nextExpandedCursor,
+          false,
+        );
+      } else {
+        setPrompt(next.text);
+        setComposerCursor(nextCursor);
+        setComposerTrigger(detectComposerTrigger(next.text, nextExpandedCursor));
+      }
+      window.requestAnimationFrame(() => {
+        composerEditorRef.current?.focusAt(nextCursor);
+      });
+      return true;
+    },
+    [
+      activePendingProgress?.activeQuestion,
+      activePendingUserInput,
+      composerEditorRef,
+      onChangeActivePendingUserInputCustomAnswer,
+      promptRef,
+      setComposerCursor,
+      setComposerTrigger,
+      setPrompt,
+    ],
+  );
+
+  const readComposerSnapshot = useCallback((): {
+    value: string;
+    cursor: number;
+    expandedCursor: number;
+  } => {
+    const editorSnapshot = composerEditorRef.current?.readSnapshot();
+    if (editorSnapshot) {
+      return editorSnapshot;
+    }
+    return {
+      value: promptRef.current,
+      cursor: composerCursor,
+      expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+    };
+  }, [composerCursor, composerEditorRef, promptRef]);
+
+  const resolveActiveComposerTrigger = useCallback((): {
+    snapshot: { value: string; cursor: number; expandedCursor: number };
+    trigger: ComposerTrigger | null;
+  } => {
+    const snapshot = readComposerSnapshot();
+    return {
+      snapshot,
+      trigger: detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
+    };
+  }, [readComposerSnapshot]);
+
+  const onSelectComposerItem = useCallback(
+    (item: ComposerCommandItem) => {
+      if (composerSelectLockRef.current) return;
+      composerSelectLockRef.current = true;
+      window.requestAnimationFrame(() => {
+        composerSelectLockRef.current = false;
+      });
+      const { snapshot, trigger } = resolveActiveComposerTrigger();
+      if (!trigger) return;
+      if (item.type === "path") {
+        const replacement = `@${item.path} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+      if (item.type === "slash-command") {
+        if (item.command === "model") {
+          const replacement = "/model ";
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
+          if (applied) {
+            setComposerHighlightedItemId(null);
+          }
+          return;
+        }
+        onHandleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+      onProviderModelSelect(item.provider, item.model);
+      const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+      });
+      if (applied) {
+        setComposerHighlightedItemId(null);
+      }
+    },
+    [
+      applyPromptReplacement,
+      onHandleInteractionModeChange,
+      onProviderModelSelect,
+      resolveActiveComposerTrigger,
+      setComposerHighlightedItemId,
+    ],
+  );
+
+  const onComposerMenuItemHighlighted = useCallback(
+    (itemId: string | null) => {
+      setComposerHighlightedItemId(itemId);
+    },
+    [setComposerHighlightedItemId],
+  );
+
+  const nudgeComposerMenuHighlight = useCallback(
+    (key: "ArrowDown" | "ArrowUp") => {
+      if (composerMenuItems.length === 0) {
+        return;
+      }
+      const highlightedIndex = composerMenuItems.findIndex(
+        (item) => item.id === composerHighlightedItemId,
+      );
+      const normalizedIndex =
+        highlightedIndex >= 0 ? highlightedIndex : key === "ArrowDown" ? -1 : 0;
+      const offset = key === "ArrowDown" ? 1 : -1;
+      const nextIndex =
+        (normalizedIndex + offset + composerMenuItems.length) % composerMenuItems.length;
+      const nextItem = composerMenuItems[nextIndex];
+      setComposerHighlightedItemId(nextItem?.id ?? null);
+    },
+    [composerHighlightedItemId, composerMenuItems, setComposerHighlightedItemId],
+  );
+
+  const onPromptChange = useCallback(
+    (
+      nextPrompt: string,
+      nextCursor: number,
+      expandedCursor: number,
+      cursorAdjacentToMention: boolean,
+    ) => {
+      if (activePendingProgress?.activeQuestion && activePendingUserInput) {
+        onChangeActivePendingUserInputCustomAnswer(
+          activePendingProgress.activeQuestion.id,
+          nextPrompt,
+          nextCursor,
+          expandedCursor,
+          cursorAdjacentToMention,
+        );
+        return;
+      }
+      promptRef.current = nextPrompt;
+      setPrompt(nextPrompt);
+      setComposerCursor(nextCursor);
+      setComposerTrigger(
+        cursorAdjacentToMention ? null : detectComposerTrigger(nextPrompt, expandedCursor),
+      );
+    },
+    [
+      activePendingProgress?.activeQuestion,
+      activePendingUserInput,
+      onChangeActivePendingUserInputCustomAnswer,
+      promptRef,
+      setComposerCursor,
+      setComposerTrigger,
+      setPrompt,
+    ],
+  );
+
+  const onComposerCommandKey = useCallback(
+    (key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab", event: KeyboardEvent) => {
+      if (key === "Tab" && event.shiftKey) {
+        toggleInteractionMode();
+        return true;
+      }
+
+      const { trigger } = resolveActiveComposerTrigger();
+      const menuIsActive = composerMenuOpenRef.current || trigger !== null;
+
+      if (menuIsActive) {
+        const currentItems = composerMenuItemsRef.current;
+        if (key === "ArrowDown" && currentItems.length > 0) {
+          nudgeComposerMenuHighlight("ArrowDown");
+          return true;
+        }
+        if (key === "ArrowUp" && currentItems.length > 0) {
+          nudgeComposerMenuHighlight("ArrowUp");
+          return true;
+        }
+        if (key === "Tab" || key === "Enter") {
+          const selectedItem = activeComposerMenuItemRef.current ?? currentItems[0];
+          if (selectedItem) {
+            onSelectComposerItem(selectedItem);
+            return true;
+          }
+        }
+      }
+
+      if (key === "Enter" && !event.shiftKey) {
+        void onSubmit();
+        return true;
+      }
+      return false;
+    },
+    [
+      nudgeComposerMenuHighlight,
+      onSelectComposerItem,
+      onSubmit,
+      resolveActiveComposerTrigger,
+      toggleInteractionMode,
+    ],
+  );
+
   return (
     <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
       <form
@@ -3377,7 +3424,7 @@ function ThreadComposer({
                   resolvedTheme={resolvedTheme}
                   isLoading={isComposerMenuLoading}
                   triggerKind={composerTriggerKind}
-                  activeItemId={activeComposerMenuItemId}
+                  activeItemId={activeComposerMenuItem?.id ?? null}
                   onHighlightedItemChange={onComposerMenuItemHighlighted}
                   onSelect={onSelectComposerItem}
                 />
